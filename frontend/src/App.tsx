@@ -96,6 +96,13 @@ const LANGUAGES: { id: string; name: string }[] = [
   { id: 'th', name: 'ไทย' },
   { id: 'id', name: 'Bahasa' },
   { id: 'vi', name: 'Tiếng Việt' },
+  { id: 'ar', name: 'العربية' },
+  { id: 'pl', name: 'Polski' },
+  { id: 'nl', name: 'Nederlands' },
+  { id: 'it', name: 'Italiano' },
+  { id: 'ru', name: 'Русский' },
+  { id: 'tr', name: 'Türkçe' },
+  { id: 'hi', name: 'हिन्दी' },
 ]
 
 // Category presets: each surfaces a set of structured spec keys relevant to
@@ -206,6 +213,17 @@ function App() {
     [activeItem?.selectedIds],
   )
   const platform = platforms.find((p) => p.id === platformId)
+
+  // Group platforms by region (preserving backend order) for the dropdown.
+  const platformGroups = useMemo<[string, Platform[]][]>(() => {
+    const map = new Map<string, Platform[]>()
+    for (const p of platforms) {
+      const arr = map.get(p.region) ?? []
+      arr.push(p)
+      map.set(p.region, arr)
+    }
+    return Array.from(map.entries())
+  }, [platforms])
 
   const templatesByCat = useMemo(() => {
     const map: Record<string, Template[]> = {}
@@ -802,10 +820,14 @@ function App() {
           <label className="sel-field">
             平台
             <select value={platformId} onChange={(e) => applyPlatform(e.target.value)}>
-              {platforms.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}（{p.region}）
-                </option>
+              {platformGroups.map(([region, ps]) => (
+                <optgroup key={region} label={region}>
+                  {ps.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>

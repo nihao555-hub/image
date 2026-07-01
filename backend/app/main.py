@@ -47,6 +47,9 @@ class GeneratePromptsRequest(BaseModel):
     platform: str = ""
     language: str = ""
     density: str = ""
+    # Optional reference product image (data URL or http URL). When provided the
+    # LLM is asked to visually inspect it before writing the prompts.
+    image_base64: Optional[str] = None
 
 
 class GeneratePromptsResponse(BaseModel):
@@ -196,13 +199,24 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
 
     template_desc = "\n".join(_tpl_line(t) for t in selected)
     product_desc = json.dumps(req.product.model_dump(), ensure_ascii=False)
-    image_note = (
-        "A reference product image will be supplied to the image model, so describe "
-        "the desired scene/styling while keeping the actual product identity from the "
-        "reference image."
-        if req.has_image
-        else "No reference image is provided, so fully describe the product itself."
-    )
+    if req.image_base64:
+        image_note = (
+            "A reference product image is attached below — LOOK AT IT CAREFULLY "
+            "first. Identify the actual product, its type, colour, material, shape "
+            "and distinctive details, and base every prompt on THIS product so the "
+            "generated set stays visually consistent with it. The same reference "
+            "image is also fed to the image model, so keep the product identity "
+            "from the reference and describe the desired scene/styling around it. "
+            "Use the text product info only to fill gaps."
+        )
+    elif req.has_image:
+        image_note = (
+            "A reference product image will be supplied to the image model, so describe "
+            "the desired scene/styling while keeping the actual product identity from the "
+            "reference image."
+        )
+    else:
+        image_note = "No reference image is provided, so fully describe the product itself."
     platform_note = (
         f"Target platform: {platform['name']} (recommended export {platform['size']}). "
         f"{platform.get('note', '')}\n"
@@ -218,7 +232,7 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         "The prompt text itself is always in English, but when a template requires "
         "on-image text you must specify the exact wording in the requested language."
     )
-    user = (
+    user_text = (
         f"Product info (JSON): {product_desc}\n"
         f"{platform_note}"
         f"{density_note}"
@@ -234,10 +248,23 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         '{"white_background": "...", "lifestyle_scene": "..."}'
     )
 
+    # When a reference image is provided, send it to the (vision-capable) LLM so
+    # it can look at the actual product before writing prompts.
+    if req.image_base64:
+        user_content: Any = [
+            {"type": "text", "text": user_text},
+            {"type": "image_url", "image_url": {"url": req.image_base64}},
+        ]
+    else:
+        user_content = user_text
+
     prompts: Dict[str, str] = {}
     try:
         content = await grsai.chat_completion(
-            [{"role": "system", "content": system}, {"role": "user", "content": user}]
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ]
         )
         parsed = _extract_json(content)
         if parsed:
@@ -265,13 +292,24 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
 
     async def _submit(job: GenerateJob) -> TaskInfo:
         urls = [job.image_base64] if job.image_base64 else None
-        task_id = await grsai.submit_draw(
-            prompt=job.prompt,
-            aspect_ratio=job.aspectRatio,
-            quality=job.quality,
-            urls=urls,
-        )
-        return TaskInfo(task_id=task_id, template_id=job.template_id, label=job.label)
+        # Retry the submission a few times to ride out transient upstream errors.
+        last_exc: Optional[Exception] = None
+        for attempt in range(3):
+            try:
+                task_id = await grsai.submit_draw(
+                    prompt=job.prompt,
+                    aspect_ratio=job.aspectRatio,
+                    quality=job.quality,
+                    urls=urls,
+                )
+                return TaskInfo(
+                    task_id=task_id, template_id=job.template_id, label=job.label
+                )
+            except Exception as exc:  # noqa: BLE001 - retry any submit failure
+                last_exc = exc
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+        raise last_exc if last_exc else grsai.GrsaiError("submit failed")
 
     # Submit all jobs concurrently so the batch is generated in parallel.
     results = await asyncio.gather(

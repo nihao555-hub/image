@@ -29,7 +29,11 @@ interface TrackedTask {
   itemName: string
   templateId: string
   templateName: string
+  job: GenerateJob
+  attempts: number
 }
+
+const MAX_ATTEMPTS = 3
 
 const DENSITIES: { id: string; name: string }[] = [
   { id: 'clean', name: '简洁少字' },
@@ -92,6 +96,7 @@ function App() {
   const [badExamples, setBadExamples] = useState<Set<string>>(new Set())
   const [error, setError] = useState('')
   const pollRef = useRef<number | null>(null)
+  const trackedRef = useRef<TrackedTask[]>([])
 
   useEffect(() => {
     fetchTemplates()
@@ -183,6 +188,7 @@ function App() {
         platformId,
         language,
         density,
+        item.imageDataUrl,
       )
       updateItem(item.id, { prompts: { ...item.prompts, ...prompts }, loadingPrompts: false })
     } catch (e) {
@@ -191,24 +197,61 @@ function App() {
     }
   }
 
-  const startPolling = (tracked: TrackedTask[]) => {
+  const startPolling = () => {
     if (pollRef.current) window.clearInterval(pollRef.current)
     const poll = async () => {
-      const idsToPoll = tracked.map((t) => t.taskId)
+      const current = trackedRef.current
+      if (!current.length) return
+      let res: Record<string, TaskResult>
       try {
-        const res = await fetchResults(idsToPoll)
-        setResults((prev) => ({ ...prev, ...res }))
-        const allDone = tracked.every((t) => {
-          const r = res[t.taskId]
-          return r && ['succeeded', 'failed', 'error'].includes(r.status)
-        })
-        if (allDone) {
-          if (pollRef.current) window.clearInterval(pollRef.current)
-          pollRef.current = null
-          setGenerating(false)
-        }
+        res = await fetchResults(current.map((t) => t.taskId))
       } catch {
-        // keep polling
+        return // transient error, keep polling
+      }
+      setResults((prev) => ({ ...prev, ...res }))
+
+      // Auto-retry any failed image up to MAX_ATTEMPTS times.
+      const toRetry = current.filter((t) => {
+        const r = res[t.taskId]
+        return (
+          r &&
+          (r.status === 'failed' || r.status === 'error') &&
+          t.attempts < MAX_ATTEMPTS
+        )
+      })
+      if (toRetry.length) {
+        for (const t of toRetry) {
+          let newTask: TrackedTask = { ...t, attempts: t.attempts + 1 }
+          try {
+            const [info] = await generateImages([t.job])
+            if (info) {
+              newTask = { ...newTask, taskId: info.task_id }
+              setResults((prev) => ({
+                ...prev,
+                [info.task_id]: { status: 'retrying', progress: 0, results: [] },
+              }))
+            }
+          } catch {
+            // keep the failed task; it will retry again next cycle if attempts remain
+          }
+          trackedRef.current = trackedRef.current.map((x) => (x === t ? newTask : x))
+        }
+        setTasks(trackedRef.current)
+        return // next cycle polls the resubmitted task ids
+      }
+
+      const allDone = trackedRef.current.every((t) => {
+        const r = res[t.taskId]
+        if (!r) return false
+        if (r.status === 'succeeded') return true
+        return (
+          (r.status === 'failed' || r.status === 'error') && t.attempts >= MAX_ATTEMPTS
+        )
+      })
+      if (allDone) {
+        if (pollRef.current) window.clearInterval(pollRef.current)
+        pollRef.current = null
+        setGenerating(false)
       }
     }
     void poll()
@@ -253,20 +296,24 @@ function App() {
       for (const item of items) {
         for (const tid of orderedSel) {
           const info = taskInfos[idx]
-          if (info) {
+          const job = jobs[idx]
+          if (info && job) {
             tracked.push({
               taskId: info.task_id,
               itemId: item.id,
               itemName: item.name,
               templateId: tid,
               templateName: templateName(tid),
+              job,
+              attempts: 1,
             })
           }
           idx++
         }
       }
+      trackedRef.current = tracked
       setTasks(tracked)
-      startPolling(tracked)
+      startPolling()
     } catch (e) {
       setError(String(e))
       setGenerating(false)
@@ -546,14 +593,24 @@ function App() {
                         <a href={url} target="_blank" rel="noreferrer">
                           <img src={url} alt={t.templateName} />
                         </a>
-                      ) : r?.status === 'failed' || r?.status === 'error' ? (
+                      ) : (r?.status === 'failed' || r?.status === 'error') &&
+                        t.attempts >= MAX_ATTEMPTS ? (
                         <div className="result-fail">
-                          失败：{r.failure_reason || r.error || '未知错误'}
+                          失败（已重试 {t.attempts} 次）：
+                          {r.failure_reason || r.error || '未知错误'}
                         </div>
                       ) : (
                         <div className="result-loading">
                           <div className="spinner" />
-                          <span>{r?.progress ? `${r.progress}%` : '排队中…'}</span>
+                          <span>
+                            {r?.status === 'retrying' ||
+                            r?.status === 'failed' ||
+                            r?.status === 'error'
+                              ? `重试中 ${t.attempts}/${MAX_ATTEMPTS}`
+                              : r?.progress
+                                ? `${r.progress}%`
+                                : '排队中…'}
+                          </span>
                         </div>
                       )}
                     </div>

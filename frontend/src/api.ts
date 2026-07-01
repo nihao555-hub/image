@@ -95,6 +95,7 @@ export async function generatePrompts(
   platform: string,
   language: string,
   density: string,
+  imageBase64?: string | null,
 ): Promise<Record<string, string>> {
   const data = await post<{ prompts: Record<string, string> }>('/api/generate-prompts', {
     product,
@@ -103,6 +104,7 @@ export async function generatePrompts(
     platform,
     language,
     density,
+    image_base64: imageBase64 ?? null,
   })
   return data.prompts
 }

@@ -31,12 +31,21 @@ export interface Platform {
   note: string
 }
 
+export interface SpecItem {
+  k: string
+  v: string
+}
+
 export interface ProductInfo {
   name: string
   category: string
   style: string
   background: string
   extra: string
+  categoryType: string
+  sku: string
+  variants: string
+  specs: SpecItem[]
 }
 
 export interface GenerateJob {

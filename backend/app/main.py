@@ -32,12 +32,24 @@ app.add_middleware(
 # --------------------------------------------------------------------------- #
 # Models
 # --------------------------------------------------------------------------- #
+class SpecItem(BaseModel):
+    k: str = ""
+    v: str = ""
+
+
 class ProductInfo(BaseModel):
     name: str = ""
     category: str = ""
     style: str = ""
     background: str = ""
     extra: str = ""
+    # Category preset the structured params belong to (apparel/digital/...).
+    categoryType: str = ""
+    # SKU / article number and its variants (colours, models, sizes...).
+    sku: str = ""
+    variants: str = ""
+    # Structured key/value specifications for spec-table style templates.
+    specs: List[SpecItem] = []
 
 
 class GeneratePromptsRequest(BaseModel):
@@ -225,6 +237,21 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
     )
     density_note = DENSITY_INSTRUCTIONS[density] + "\n"
 
+    specs = [s for s in req.product.specs if (s.k or s.v)]
+    params_note = ""
+    if specs:
+        spec_str = "; ".join(f"{s.k}: {s.v}" for s in specs)
+        params_note = (
+            f"Structured product specifications: {spec_str}. For spec-table / "
+            "dimension / parameter templates, lay these out as the on-image "
+            "labels and values (verbatim, in the requested language).\n"
+        )
+    if req.product.variants.strip():
+        params_note += (
+            f"SKU variants: {req.product.variants.strip()}. For the color/SKU "
+            "variant template, show the product in exactly these variants.\n"
+        )
+
     system = (
         "You are an expert e-commerce product photography art director and prompt "
         "engineer for a text-to-image model (gpt-image-2). Produce vivid, concrete, "
@@ -236,6 +263,7 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         f"Product info (JSON): {product_desc}\n"
         f"{platform_note}"
         f"{density_note}"
+        f"{params_note}"
         f"{image_note}\n\n"
         f"Create one detailed image-generation prompt for EACH of the following "
         f"template types:\n{template_desc}\n\n"
@@ -259,22 +287,27 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         user_content = user_text
 
     prompts: Dict[str, str] = {}
-    try:
-        content = await grsai.chat_completion(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_content},
-            ]
-        )
-        parsed = _extract_json(content)
-        if parsed:
-            for t in selected:
-                val = parsed.get(t["id"])
-                if isinstance(val, str) and val.strip():
-                    prompts[t["id"]] = val.strip()
-    except Exception:
-        # Fall through to fallbacks below.
-        pass
+    # Retry the LLM a few times so a transient error / unparseable reply does not
+    # silently degrade every prompt to the generic fallback.
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_content},
+    ]
+    for attempt in range(3):
+        try:
+            content = await grsai.chat_completion(messages)
+            parsed = _extract_json(content)
+            if parsed:
+                for t in selected:
+                    val = parsed.get(t["id"])
+                    if isinstance(val, str) and val.strip():
+                        prompts[t["id"]] = val.strip()
+                if prompts:
+                    break
+        except Exception:
+            pass
+        if attempt < 2:
+            await asyncio.sleep(1.0 * (attempt + 1))
 
     # Ensure every requested template has a prompt.
     for t in selected:

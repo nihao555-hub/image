@@ -21,6 +21,12 @@ interface BatchItem {
   product: ProductInfo
   prompts: Record<string, string>
   loadingPrompts: boolean
+  // Per-product configuration (each product can target a different platform /
+  // language / density and pick its own set of image types).
+  platformId: string
+  language: string
+  density: string
+  selectedIds: string[]
 }
 
 interface TrackedTask {
@@ -60,32 +66,53 @@ const LANGUAGES: { id: string; name: string }[] = [
   { id: 'vi', name: 'Tiếng Việt' },
 ]
 
+// Category presets: each surfaces a set of structured spec keys relevant to
+// that product type. Selecting a preset pre-fills the spec rows (still fully
+// editable) so the info feeds spec-table / parameter templates cleanly.
+const CATEGORY_TYPES: { id: string; name: string; keys: string[] }[] = [
+  { id: 'general', name: '通用', keys: [] },
+  { id: 'apparel', name: '服饰', keys: ['尺码', '材质', '颜色', '适用人群', '版型'] },
+  { id: 'digital', name: '数码', keys: ['规格', '接口', '续航', '重量', '兼容性'] },
+  { id: 'beauty', name: '美妆', keys: ['容量', '成分', '功效', '适用肤质', '产地'] },
+  { id: 'home', name: '家居', keys: ['尺寸', '材质', '容量', '重量', '保养'] },
+  { id: 'food', name: '食品', keys: ['净含量', '口味', '配料', '保质期', '储存方式'] },
+]
+
 const emptyProduct = (): ProductInfo => ({
   name: '',
   category: '',
   style: '',
   background: '',
   extra: '',
+  categoryType: 'general',
+  sku: '',
+  variants: '',
+  specs: [],
 })
 
 let itemCounter = 1
-const newItem = (): BatchItem => ({
+const newItem = (cfg?: {
+  platformId: string
+  language: string
+  density: string
+  selectedIds: string[]
+}): BatchItem => ({
   id: `item-${itemCounter++}-${Date.now()}`,
   name: `商品 ${itemCounter - 1}`,
   imageDataUrl: null,
   product: emptyProduct(),
   prompts: {},
   loadingPrompts: false,
+  platformId: cfg?.platformId ?? 'amazon',
+  language: cfg?.language ?? 'en',
+  density: cfg?.density ?? 'clean',
+  selectedIds: cfg?.selectedIds ? [...cfg.selectedIds] : [],
 })
 
 function App() {
   const [templates, setTemplates] = useState<Template[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [platforms, setPlatforms] = useState<Platform[]>([])
-  const [platformId, setPlatformId] = useState('amazon')
-  const [language, setLanguage] = useState('en')
-  const [density, setDensity] = useState('clean')
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [quality, setQuality] = useState('high')
   const [items, setItems] = useState<BatchItem[]>([newItem()])
   const [activeItemId, setActiveItemId] = useState<string>('')
@@ -110,9 +137,20 @@ function App() {
         setPlatforms(p)
         const amazon = p.find((x) => x.id === 'amazon') || p[0]
         if (amazon) {
-          setSelectedIds(new Set(amazon.templates))
-          setLanguage(amazon.language)
-          setDensity(amazon.textDensity)
+          // Seed any product that has not picked its image types yet.
+          setItems((prev) =>
+            prev.map((it) =>
+              it.selectedIds.length === 0
+                ? {
+                    ...it,
+                    platformId: amazon.id,
+                    language: amazon.language,
+                    density: amazon.textDensity,
+                    selectedIds: [...amazon.templates],
+                  }
+                : it,
+            ),
+          )
         }
       })
       .catch((e) => setError(String(e)))
@@ -125,6 +163,14 @@ function App() {
   }, [items, activeItemId])
 
   const activeItem = items.find((i) => i.id === activeItemId) || items[0]
+  // The active product's config drives the topbar selectors and the gallery.
+  const platformId = activeItem?.platformId ?? 'amazon'
+  const language = activeItem?.language ?? 'en'
+  const density = activeItem?.density ?? 'clean'
+  const selectedIds = useMemo(
+    () => new Set(activeItem?.selectedIds ?? []),
+    [activeItem?.selectedIds],
+  )
   const platform = platforms.find((p) => p.id === platformId)
 
   const templatesByCat = useMemo(() => {
@@ -135,16 +181,6 @@ function App() {
     return map
   }, [templates])
 
-  const applyPlatform = (id: string) => {
-    setPlatformId(id)
-    const p = platforms.find((x) => x.id === id)
-    if (p) {
-      setSelectedIds(new Set(p.templates))
-      setLanguage(p.language)
-      setDensity(p.textDensity)
-    }
-  }
-
   const updateItem = (id: string, patch: Partial<BatchItem>) => {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
   }
@@ -154,16 +190,75 @@ function App() {
     )
   }
 
+  // Switch a product's category preset; prefill spec rows from the preset keys
+  // (kept only when the user has not already entered specs).
+  const setCategoryType = (id: string, ctype: string) => {
+    const preset = CATEGORY_TYPES.find((c) => c.id === ctype)
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== id) return it
+        const hasData = it.product.specs.some((s) => s.k || s.v)
+        const specs =
+          hasData || !preset || preset.keys.length === 0
+            ? it.product.specs
+            : preset.keys.map((k) => ({ k, v: '' }))
+        return { ...it, product: { ...it.product, categoryType: ctype, specs } }
+      }),
+    )
+  }
+  const updateSpec = (id: string, i: number, patch: Partial<{ k: string; v: string }>) =>
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id
+          ? {
+              ...it,
+              product: {
+                ...it.product,
+                specs: it.product.specs.map((s, j) => (j === i ? { ...s, ...patch } : s)),
+              },
+            }
+          : it,
+      ),
+    )
+  const addSpec = (id: string) =>
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id
+          ? { ...it, product: { ...it.product, specs: [...it.product.specs, { k: '', v: '' }] } }
+          : it,
+      ),
+    )
+  const removeSpec = (id: string, i: number) =>
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id
+          ? { ...it, product: { ...it.product, specs: it.product.specs.filter((_, j) => j !== i) } }
+          : it,
+      ),
+    )
+
+  // All config edits below apply to the currently active product only.
+  const applyPlatform = (id: string) => {
+    if (!activeItem) return
+    const p = platforms.find((x) => x.id === id)
+    updateItem(
+      activeItem.id,
+      p
+        ? { platformId: id, selectedIds: [...p.templates], language: p.language, density: p.textDensity }
+        : { platformId: id },
+    )
+  }
+
   const toggleTemplate = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+    if (!activeItem) return
+    const cur = activeItem.selectedIds
+    updateItem(activeItem.id, {
+      selectedIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id],
     })
   }
-  const selectAll = () => setSelectedIds(new Set(templates.map((t) => t.id)))
-  const clearAll = () => setSelectedIds(new Set())
+  const selectAll = () =>
+    activeItem && updateItem(activeItem.id, { selectedIds: templates.map((t) => t.id) })
+  const clearAll = () => activeItem && updateItem(activeItem.id, { selectedIds: [] })
 
   const onUpload = (id: string, file: File) => {
     const reader = new FileReader()
@@ -174,8 +269,8 @@ function App() {
   const templateName = (tid: string) => templates.find((t) => t.id === tid)?.name || tid
 
   const aiGenerate = async (item: BatchItem) => {
-    if (selectedIds.size === 0) {
-      setError('请先在右侧选择至少一种套图类型')
+    if (item.selectedIds.length === 0) {
+      setError('请先为该商品选择至少一种套图类型')
       return
     }
     setError('')
@@ -183,11 +278,11 @@ function App() {
     try {
       const prompts = await generatePrompts(
         item.product,
-        Array.from(selectedIds),
+        item.selectedIds,
         !!item.imageDataUrl,
-        platformId,
-        language,
-        density,
+        item.platformId,
+        item.language,
+        item.density,
         item.imageDataUrl,
       )
       updateItem(item.id, { prompts: { ...item.prompts, ...prompts }, loadingPrompts: false })
@@ -195,6 +290,45 @@ function App() {
       setError(String(e))
       updateItem(item.id, { loadingPrompts: false })
     }
+  }
+
+  const aiGenerateAll = async () => {
+    const targets = items.filter((it) => it.selectedIds.length > 0)
+    if (targets.length === 0) {
+      setError('请先为商品选择套图类型')
+      return
+    }
+    setError('')
+    setItems((prev) =>
+      prev.map((it) => (it.selectedIds.length > 0 ? { ...it, loadingPrompts: true } : it)),
+    )
+    await Promise.all(
+      targets.map(async (item) => {
+        try {
+          const prompts = await generatePrompts(
+            item.product,
+            item.selectedIds,
+            !!item.imageDataUrl,
+            item.platformId,
+            item.language,
+            item.density,
+            item.imageDataUrl,
+          )
+          setItems((prev) =>
+            prev.map((it) =>
+              it.id === item.id
+                ? { ...it, prompts: { ...it.prompts, ...prompts }, loadingPrompts: false }
+                : it,
+            ),
+          )
+        } catch (e) {
+          setError(String(e))
+          setItems((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, loadingPrompts: false } : it)),
+          )
+        }
+      }),
+    )
   }
 
   const startPolling = () => {
@@ -259,14 +393,17 @@ function App() {
   }
 
   const generateAll = async () => {
-    if (selectedIds.size === 0) {
-      setError('请先选择至少一种套图类型')
+    const totalSel = items.reduce((n, it) => n + it.selectedIds.length, 0)
+    if (totalSel === 0) {
+      setError('请先为商品选择至少一种套图类型')
       return
     }
     setError('')
     const jobs: GenerateJob[] = []
-    const orderedSel = templates.map((t) => t.id).filter((id) => selectedIds.has(id))
+    // Each product uses its own selected image types, in gallery order.
+    const plan: { item: BatchItem; tid: string }[] = []
     for (const item of items) {
+      const orderedSel = templates.map((t) => t.id).filter((id) => item.selectedIds.includes(id))
       for (const tid of orderedSel) {
         const tpl = templates.find((t) => t.id === tid)
         const prompt =
@@ -282,6 +419,7 @@ function App() {
           image_base64: item.imageDataUrl,
           label: `${item.name} · ${tpl?.name || tid}`,
         })
+        plan.push({ item, tid })
       }
     }
     if (jobs.length === 0) return
@@ -292,25 +430,21 @@ function App() {
     try {
       const taskInfos = await generateImages(jobs)
       const tracked: TrackedTask[] = []
-      let idx = 0
-      for (const item of items) {
-        for (const tid of orderedSel) {
-          const info = taskInfos[idx]
-          const job = jobs[idx]
-          if (info && job) {
-            tracked.push({
-              taskId: info.task_id,
-              itemId: item.id,
-              itemName: item.name,
-              templateId: tid,
-              templateName: templateName(tid),
-              job,
-              attempts: 1,
-            })
-          }
-          idx++
+      plan.forEach(({ item, tid }, idx) => {
+        const info = taskInfos[idx]
+        const job = jobs[idx]
+        if (info && job) {
+          tracked.push({
+            taskId: info.task_id,
+            itemId: item.id,
+            itemName: item.name,
+            templateId: tid,
+            templateName: templateName(tid),
+            job,
+            attempts: 1,
+          })
         }
-      }
+      })
       trackedRef.current = tracked
       setTasks(tracked)
       startPolling()
@@ -326,7 +460,7 @@ function App() {
     }
   }, [])
 
-  const totalJobs = items.length * selectedIds.size
+  const totalJobs = items.reduce((n, it) => n + it.selectedIds.length, 0)
   const doneCount = tasks.filter((t) => results[t.taskId]?.status === 'succeeded').length
 
   const markBad = (id: string) =>
@@ -357,7 +491,24 @@ function App() {
             )}
           </button>
         ))}
-        <button className="item-tab add" onClick={() => setItems((p) => [...p, newItem()])}>
+        <button
+          className="item-tab add"
+          onClick={() =>
+            setItems((p) => [
+              ...p,
+              newItem(
+                activeItem
+                  ? {
+                      platformId: activeItem.platformId,
+                      language: activeItem.language,
+                      density: activeItem.density,
+                      selectedIds: activeItem.selectedIds,
+                    }
+                  : undefined,
+              ),
+            ])
+          }
+        >
           <span className="ph">+</span>
           <em>添加商品</em>
         </button>
@@ -398,6 +549,68 @@ function App() {
               onChange={(e) => updateProduct(activeItem.id, { category: e.target.value })}
             />
           </Field>
+          <div className="field two">
+            <Field label="SKU / 货号">
+              <input
+                value={activeItem.product.sku}
+                placeholder="如：BT-500-BLK"
+                onChange={(e) => updateProduct(activeItem.id, { sku: e.target.value })}
+              />
+            </Field>
+            <Field label="类目类型">
+              <select
+                value={activeItem.product.categoryType}
+                onChange={(e) => setCategoryType(activeItem.id, e.target.value)}
+              >
+                {CATEGORY_TYPES.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <Field label="SKU 变体（多色 / 多规格，用逗号分隔）">
+            <input
+              value={activeItem.product.variants}
+              placeholder="如：黑色, 白色, 天空蓝"
+              onChange={(e) => updateProduct(activeItem.id, { variants: e.target.value })}
+            />
+          </Field>
+          <div className="field">
+            <label>
+              规格参数
+              <button className="tiny inline" onClick={() => addSpec(activeItem.id)}>
+                + 加一行
+              </button>
+            </label>
+            {activeItem.product.specs.length === 0 && (
+              <p className="spec-hint">选「类目类型」可自动带出常用参数，或手动添加</p>
+            )}
+            {activeItem.product.specs.map((s, i) => (
+              <div className="spec-row" key={i}>
+                <input
+                  className="spec-k"
+                  value={s.k}
+                  placeholder="参数名"
+                  onChange={(e) => updateSpec(activeItem.id, i, { k: e.target.value })}
+                />
+                <input
+                  className="spec-v"
+                  value={s.v}
+                  placeholder="参数值"
+                  onChange={(e) => updateSpec(activeItem.id, i, { v: e.target.value })}
+                />
+                <button
+                  className="spec-del"
+                  title="删除"
+                  onClick={() => removeSpec(activeItem.id, i)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
           <Field label="风格">
             <input
               value={activeItem.product.style}
@@ -420,13 +633,26 @@ function App() {
               onChange={(e) => updateProduct(activeItem.id, { extra: e.target.value })}
             />
           </Field>
-          <button
-            className="secondary full"
-            disabled={activeItem.loadingPrompts}
-            onClick={() => aiGenerate(activeItem)}
-          >
-            {activeItem.loadingPrompts ? 'AI 生成中…' : 'AI 生成完整提示词'}
-          </button>
+          <div className="ai-btns">
+            <button
+              className="secondary"
+              disabled={activeItem.loadingPrompts}
+              onClick={() => aiGenerate(activeItem)}
+            >
+              {activeItem.loadingPrompts ? 'AI 生成中…' : 'AI 生成提示词（本商品）'}
+            </button>
+            {items.length > 1 && (
+              <button
+                className="secondary"
+                disabled={items.some((it) => it.loadingPrompts)}
+                onClick={aiGenerateAll}
+              >
+                {items.some((it) => it.loadingPrompts)
+                  ? 'AI 生成中…'
+                  : `为全部 ${items.length} 个商品生成`}
+              </button>
+            )}
+          </div>
 
           {selectedIds.size > 0 && (
             <div className="prompts">
@@ -511,7 +737,10 @@ function App() {
           </label>
           <label className="sel-field">
             文字语言
-            <select value={language} onChange={(e) => setLanguage(e.target.value)}>
+            <select
+              value={language}
+              onChange={(e) => activeItem && updateItem(activeItem.id, { language: e.target.value })}
+            >
               {LANGUAGES.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name}
@@ -521,7 +750,10 @@ function App() {
           </label>
           <label className="sel-field">
             信息密度
-            <select value={density} onChange={(e) => setDensity(e.target.value)}>
+            <select
+              value={density}
+              onChange={(e) => activeItem && updateItem(activeItem.id, { density: e.target.value })}
+            >
               {DENSITIES.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.name}
@@ -555,8 +787,9 @@ function App() {
 
       {platform && (
         <div className="platform-bar">
+          {activeItem && <span className="cur-item">当前商品：{activeItem.name}</span>}
           <b>{platform.name}</b>
-          <span>推荐 {platform.templates.length} 张一套</span>
+          <span>已选 {selectedIds.size} 张</span>
           <span>导出 {platform.size}</span>
           <span className={`density-tag d-${density}`}>
             {DENSITIES.find((d) => d.id === density)?.name}

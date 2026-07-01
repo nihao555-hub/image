@@ -1,10 +1,12 @@
 import asyncio
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import config, grsai
@@ -301,3 +303,14 @@ async def result(req: ResultRequest) -> Dict[str, Any]:
 
     pairs = await asyncio.gather(*(_one(tid) for tid in req.ids))
     return {"results": dict(pairs)}
+
+
+# --------------------------------------------------------------------------- #
+# Static frontend (single-origin deployment)
+# --------------------------------------------------------------------------- #
+# When the built frontend is present (frontend/dist), serve it from the same
+# origin as the API so the app can be deployed behind a single URL. API routes
+# above are registered first, so they take precedence over this catch-all mount.
+_DIST = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+if os.path.isdir(_DIST):
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")

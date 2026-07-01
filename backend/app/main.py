@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from typing import Any, Dict, List, Optional
@@ -7,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from . import config, grsai
-from .templates import TEMPLATES, TEMPLATE_BY_ID
+from .templates import CATEGORIES, TEMPLATES, TEMPLATE_BY_ID
+from .platforms import LANGUAGE_NAMES, PLATFORMS, PLATFORM_BY_ID
 
 app = FastAPI(title="AI E-commerce Image Set Generator")
 
@@ -35,6 +37,8 @@ class GeneratePromptsRequest(BaseModel):
     product: ProductInfo
     template_ids: List[str]
     has_image: bool = False
+    platform: str = ""
+    language: str = ""
 
 
 class GeneratePromptsResponse(BaseModel):
@@ -78,10 +82,15 @@ async def health() -> Dict[str, Any]:
 
 @app.get("/api/templates")
 async def list_templates() -> Dict[str, Any]:
-    return {"templates": TEMPLATES}
+    return {"templates": TEMPLATES, "categories": CATEGORIES}
 
 
-def _fallback_prompt(product: ProductInfo, template_id: str) -> str:
+@app.get("/api/platforms")
+async def list_platforms() -> Dict[str, Any]:
+    return {"platforms": PLATFORMS}
+
+
+def _fallback_prompt(product: ProductInfo, template_id: str, language: str = "") -> str:
     tpl = TEMPLATE_BY_ID.get(template_id)
     guidance = tpl["guidance"] if tpl else ""
     parts = []
@@ -98,7 +107,14 @@ def _fallback_prompt(product: ProductInfo, template_id: str) -> str:
     if product.extra:
         extra.append(product.extra)
     extra_str = (". " + ", ".join(extra)) if extra else ""
-    return f"Professional e-commerce photo of {subject}. {guidance}{extra_str}"
+    text_str = ""
+    if tpl and tpl.get("hasText"):
+        lang = LANGUAGE_NAMES.get(language, "English")
+        text_str = (
+            f" Render concise, well-designed marketing copy / callout labels ON "
+            f"the image in {lang}, highlighting the product's key selling points."
+        )
+    return f"Professional e-commerce photo of {subject}. {guidance}{extra_str}{text_str}"
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -126,10 +142,23 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
     if not selected:
         raise HTTPException(status_code=400, detail="No valid templates selected")
 
-    template_desc = "\n".join(
-        f"- id: {t['id']} | name: {t['name']} ({t['en']}) | guidance: {t['guidance']}"
-        for t in selected
-    )
+    # Resolve platform + on-image text language.
+    platform = PLATFORM_BY_ID.get(req.platform)
+    language = req.language or (platform["language"] if platform else "en")
+    lang_name = LANGUAGE_NAMES.get(language, "English")
+
+    def _tpl_line(t: Dict[str, Any]) -> str:
+        if t.get("hasText"):
+            text_rule = (
+                f" | ON-IMAGE TEXT REQUIRED: include tasteful, well-composed "
+                f"marketing copy / labels rendered on the image in {lang_name} "
+                f"(short punchy selling points, spelled correctly)."
+            )
+        else:
+            text_rule = " | NO TEXT: keep the image completely free of any text or logos."
+        return f"- id: {t['id']} | name: {t['name']} ({t['en']}) | guidance: {t['guidance']}{text_rule}"
+
+    template_desc = "\n".join(_tpl_line(t) for t in selected)
     product_desc = json.dumps(req.product.model_dump(), ensure_ascii=False)
     image_note = (
         "A reference product image will be supplied to the image model, so describe "
@@ -138,19 +167,30 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         if req.has_image
         else "No reference image is provided, so fully describe the product itself."
     )
+    platform_note = (
+        f"Target platform: {platform['name']} (recommended export {platform['size']}). "
+        f"{platform.get('note', '')}\n"
+        if platform
+        else ""
+    )
 
     system = (
         "You are an expert e-commerce product photography art director and prompt "
         "engineer for a text-to-image model (gpt-image-2). Produce vivid, concrete, "
-        "detailed English prompts optimized for commercial product photography."
+        "detailed English prompts optimized for commercial product photography. "
+        "The prompt text itself is always in English, but when a template requires "
+        "on-image text you must specify the exact wording in the requested language."
     )
     user = (
         f"Product info (JSON): {product_desc}\n"
+        f"{platform_note}"
         f"{image_note}\n\n"
         f"Create one detailed image-generation prompt for EACH of the following "
         f"template types:\n{template_desc}\n\n"
         "Each prompt should incorporate the product info, respect the template "
-        "guidance, and specify composition, lighting, mood, and quality. "
+        "guidance, follow its TEXT rule strictly, and specify composition, "
+        "lighting, mood, and quality. For templates requiring on-image text, write "
+        f"the actual short copy in {lang_name}. "
         "Return ONLY a JSON object mapping each template id to its prompt string, "
         "no markdown, no extra commentary. Example: "
         '{"white_background": "...", "lifestyle_scene": "..."}'
@@ -173,7 +213,7 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
 
     # Ensure every requested template has a prompt.
     for t in selected:
-        prompts.setdefault(t["id"], _fallback_prompt(req.product, t["id"]))
+        prompts.setdefault(t["id"], _fallback_prompt(req.product, t["id"], language))
 
     return GeneratePromptsResponse(prompts=prompts)
 
@@ -183,32 +223,35 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     if not req.jobs:
         raise HTTPException(status_code=400, detail="No jobs provided")
 
-    tasks: List[TaskInfo] = []
-    for job in req.jobs:
+    async def _submit(job: GenerateJob) -> TaskInfo:
         urls = [job.image_base64] if job.image_base64 else None
-        try:
-            task_id = await grsai.submit_draw(
-                prompt=job.prompt,
-                aspect_ratio=job.aspectRatio,
-                quality=job.quality,
-                urls=urls,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Generation submit failed: {exc}")
-        tasks.append(
-            TaskInfo(task_id=task_id, template_id=job.template_id, label=job.label)
+        task_id = await grsai.submit_draw(
+            prompt=job.prompt,
+            aspect_ratio=job.aspectRatio,
+            quality=job.quality,
+            urls=urls,
         )
+        return TaskInfo(task_id=task_id, template_id=job.template_id, label=job.label)
+
+    # Submit all jobs concurrently so the batch is generated in parallel.
+    results = await asyncio.gather(
+        *(_submit(job) for job in req.jobs), return_exceptions=True
+    )
+    tasks: List[TaskInfo] = []
+    for r in results:
+        if isinstance(r, Exception):
+            raise HTTPException(status_code=502, detail=f"Generation submit failed: {r}")
+        tasks.append(r)
     return GenerateResponse(tasks=tasks)
 
 
 @app.post("/api/result")
 async def result(req: ResultRequest) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    for task_id in req.ids:
+    async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:
         try:
             data = await grsai.get_result(task_id)
             d = data.get("data", {})
-            out[task_id] = {
+            return task_id, {
                 "status": d.get("status", "unknown"),
                 "progress": d.get("progress", 0),
                 "results": d.get("results") or [],
@@ -216,5 +259,7 @@ async def result(req: ResultRequest) -> Dict[str, Any]:
                 "error": d.get("error", ""),
             }
         except Exception as exc:
-            out[task_id] = {"status": "error", "error": str(exc), "results": []}
-    return {"results": out}
+            return task_id, {"status": "error", "error": str(exc), "results": []}
+
+    pairs = await asyncio.gather(*(_one(tid) for tid in req.ids))
+    return {"results": dict(pairs)}

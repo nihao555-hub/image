@@ -2,8 +2,27 @@ export interface Template {
   id: string
   name: string
   en: string
+  category: string
   aspectRatio: string
+  hasText: boolean
+  example: string
   guidance: string
+}
+
+export interface Category {
+  id: string
+  name: string
+}
+
+export interface Platform {
+  id: string
+  name: string
+  region: string
+  language: string
+  size: string
+  aspect: string
+  templates: string[]
+  note: string
 }
 
 export interface ProductInfo {
@@ -50,22 +69,32 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return resp.json() as Promise<T>
 }
 
-export async function fetchTemplates(): Promise<Template[]> {
+export async function fetchTemplates(): Promise<{ templates: Template[]; categories: Category[] }> {
   const resp = await fetch('/api/templates')
   if (!resp.ok) throw new Error('Failed to load templates')
+  return resp.json()
+}
+
+export async function fetchPlatforms(): Promise<Platform[]> {
+  const resp = await fetch('/api/platforms')
+  if (!resp.ok) throw new Error('Failed to load platforms')
   const data = await resp.json()
-  return data.templates as Template[]
+  return data.platforms as Platform[]
 }
 
 export async function generatePrompts(
   product: ProductInfo,
   templateIds: string[],
   hasImage: boolean,
+  platform: string,
+  language: string,
 ): Promise<Record<string, string>> {
   const data = await post<{ prompts: Record<string, string> }>('/api/generate-prompts', {
     product,
     template_ids: templateIds,
     has_image: hasImage,
+    platform,
+    language,
   })
   return data.prompts
 }

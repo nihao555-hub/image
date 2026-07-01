@@ -29,6 +29,38 @@ interface BatchItem {
   selectedIds: string[]
 }
 
+interface HistoryImage {
+  label: string
+  url: string
+}
+
+interface HistoryEntry {
+  id: string
+  ts: number
+  title: string
+  images: HistoryImage[]
+}
+
+const HISTORY_KEY = 'ecom_image_history'
+const HISTORY_MAX = 40
+
+const loadHistory = (): HistoryEntry[] => {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+const fmtTime = (ts: number) => {
+  const d = new Date(ts)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 interface TrackedTask {
   taskId: string
   itemId: string
@@ -121,6 +153,8 @@ function App() {
   const [tasks, setTasks] = useState<TrackedTask[]>([])
   const [results, setResults] = useState<Record<string, TaskResult>>({})
   const [badExamples, setBadExamples] = useState<Set<string>>(new Set())
+  const [history, setHistory] = useState<HistoryEntry[]>(() => loadHistory())
+  const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
   const pollRef = useRef<number | null>(null)
   const trackedRef = useRef<TrackedTask[]>([])
@@ -386,10 +420,50 @@ function App() {
         if (pollRef.current) window.clearInterval(pollRef.current)
         pollRef.current = null
         setGenerating(false)
+        saveHistoryEntry(current, res)
       }
     }
     void poll()
     pollRef.current = window.setInterval(poll, 4000)
+  }
+
+  // Persist a completed batch (only successfully generated images) to the
+  // history drawer so users can revisit past results across sessions.
+  const saveHistoryEntry = (tracked: TrackedTask[], res: Record<string, TaskResult>) => {
+    const images: HistoryImage[] = tracked
+      .map((t) => {
+        const url = res[t.taskId]?.results?.[0]?.url
+        return url ? { label: `${t.itemName} · ${t.templateName}`, url } : null
+      })
+      .filter((x): x is HistoryImage => x !== null)
+    if (images.length === 0) return
+    const names = Array.from(new Set(tracked.map((t) => t.itemName)))
+    const title =
+      names.length <= 2 ? names.join('、') : `${names.slice(0, 2).join('、')} 等 ${names.length} 个商品`
+    const entry: HistoryEntry = {
+      id: `h-${Date.now()}`,
+      ts: Date.now(),
+      title: `${title} · ${images.length} 张`,
+      images,
+    }
+    setHistory((prev) => {
+      const next = [entry, ...prev].slice(0, HISTORY_MAX)
+      try {
+        localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+      } catch {
+        // storage full / unavailable — keep in-memory only
+      }
+      return next
+    })
+  }
+
+  const clearHistory = () => {
+    setHistory([])
+    try {
+      localStorage.removeItem(HISTORY_KEY)
+    } catch {
+      // ignore
+    }
   }
 
   const generateAll = async () => {
@@ -776,6 +850,13 @@ function App() {
             </button>
           )}
           <button
+            className="ghost"
+            onClick={() => setShowHistory((v) => !v)}
+            title="查看历史生成记录"
+          >
+            历史记录{history.length > 0 ? ` (${history.length})` : ''}
+          </button>
+          <button
             className="primary big"
             disabled={generating || templates.length === 0}
             onClick={generateAll}
@@ -910,6 +991,54 @@ function App() {
           )}
         </aside>
       </div>
+
+      {showHistory && (
+        <div className="history-overlay" onClick={() => setShowHistory(false)}>
+          <aside className="history-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="history-head">
+              <h2>历史记录</h2>
+              <div className="history-head-actions">
+                {history.length > 0 && (
+                  <button className="tiny" onClick={clearHistory}>
+                    清空
+                  </button>
+                )}
+                <button className="tiny" onClick={() => setShowHistory(false)}>
+                  关闭
+                </button>
+              </div>
+            </div>
+            {history.length === 0 ? (
+              <p className="history-empty">还没有生成记录，批量生成完成后会自动保存到这里。</p>
+            ) : (
+              <div className="history-scroll">
+                {history.map((h) => (
+                  <section className="history-entry" key={h.id}>
+                    <div className="history-entry-head">
+                      <strong>{h.title}</strong>
+                      <span>{fmtTime(h.ts)}</span>
+                    </div>
+                    <div className="history-thumbs">
+                      {h.images.map((img, i) => (
+                        <a
+                          key={i}
+                          href={img.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={img.label}
+                          className="history-thumb"
+                        >
+                          <img src={img.url} alt={img.label} />
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
     </div>
   )
 }

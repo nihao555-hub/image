@@ -382,6 +382,13 @@ async def result(req: ResultRequest) -> Dict[str, Any]:
 # When the built frontend is present (frontend/dist), serve it from the same
 # origin as the API so the app can be deployed behind a single URL. API routes
 # above are registered first, so they take precedence over this catch-all mount.
-_DIST = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
-if os.path.isdir(_DIST):
-    app.mount("/", StaticFiles(directory=_DIST, html=True), name="frontend")
+# In local dev the build lives in ../../frontend/dist; for a packaged deploy the
+# build is copied to app/webdist so it ships inside the backend build context.
+_DIST_CANDIDATES = [
+    os.path.join(os.path.dirname(__file__), "webdist"),
+    os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"),
+]
+for _dist in _DIST_CANDIDATES:
+    if os.path.isdir(_dist):
+        app.mount("/", StaticFiles(directory=_dist, html=True), name="frontend")
+        break

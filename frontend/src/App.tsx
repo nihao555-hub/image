@@ -31,6 +31,17 @@ interface TrackedTask {
   templateName: string
 }
 
+const DENSITIES: { id: string; name: string }[] = [
+  { id: 'clean', name: '简洁少字' },
+  { id: 'balanced', name: '均衡' },
+  { id: 'rich', name: '富信息' },
+]
+
+const TEXT_LEVEL_LABEL: Record<string, string> = {
+  light: '少量文字',
+  rich: '富信息',
+}
+
 const LANGUAGES: { id: string; name: string }[] = [
   { id: 'zh', name: '简体中文' },
   { id: 'en', name: 'English' },
@@ -69,6 +80,7 @@ function App() {
   const [platforms, setPlatforms] = useState<Platform[]>([])
   const [platformId, setPlatformId] = useState('amazon')
   const [language, setLanguage] = useState('en')
+  const [density, setDensity] = useState('clean')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [quality, setQuality] = useState('high')
   const [items, setItems] = useState<BatchItem[]>([newItem()])
@@ -95,6 +107,7 @@ function App() {
         if (amazon) {
           setSelectedIds(new Set(amazon.templates))
           setLanguage(amazon.language)
+          setDensity(amazon.textDensity)
         }
       })
       .catch((e) => setError(String(e)))
@@ -123,6 +136,7 @@ function App() {
     if (p) {
       setSelectedIds(new Set(p.templates))
       setLanguage(p.language)
+      setDensity(p.textDensity)
     }
   }
 
@@ -168,6 +182,7 @@ function App() {
         !!item.imageDataUrl,
         platformId,
         language,
+        density,
       )
       updateItem(item.id, { prompts: { ...item.prompts, ...prompts }, loadingPrompts: false })
     } catch (e) {
@@ -375,7 +390,11 @@ function App() {
                   <div className="prompt-item" key={t.id}>
                     <label>
                       {t.name}
-                      {t.hasText && <span className="txt-badge">文字</span>}
+                      {TEXT_LEVEL_LABEL[t.textLevel] && (
+                        <span className={`txt-badge lv-${t.textLevel}`}>
+                          {TEXT_LEVEL_LABEL[t.textLevel]}
+                        </span>
+                      )}
                     </label>
                     <textarea
                       rows={2}
@@ -412,7 +431,9 @@ function App() {
             <div className="gc-fallback">{t.name.slice(0, 2)}</div>
           )}
           <span className="gc-check">{sel ? '选' : ''}</span>
-          {t.hasText && <span className="gc-txt">带文字</span>}
+          {TEXT_LEVEL_LABEL[t.textLevel] && (
+            <span className={`gc-txt lv-${t.textLevel}`}>{TEXT_LEVEL_LABEL[t.textLevel]}</span>
+          )}
         </div>
         <div className="gc-name">{t.name}</div>
         <div className="gc-en">{t.en}</div>
@@ -452,6 +473,16 @@ function App() {
             </select>
           </label>
           <label className="sel-field">
+            信息密度
+            <select value={density} onChange={(e) => setDensity(e.target.value)}>
+              {DENSITIES.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="sel-field">
             画质
             <select value={quality} onChange={(e) => setQuality(e.target.value)}>
               <option value="auto">自动</option>
@@ -480,6 +511,9 @@ function App() {
           <b>{platform.name}</b>
           <span>推荐 {platform.templates.length} 张一套</span>
           <span>导出 {platform.size}</span>
+          <span className={`density-tag d-${density}`}>
+            {DENSITIES.find((d) => d.id === density)?.name}
+          </span>
           <span className="pnote">{platform.note}</span>
         </div>
       )}
@@ -575,7 +609,11 @@ function App() {
                 .map((t) => (
                   <div className="compact-item" key={t.id}>
                     <span>{t.name}</span>
-                    {t.hasText && <span className="txt-badge">文字</span>}
+                    {TEXT_LEVEL_LABEL[t.textLevel] && (
+                      <span className={`txt-badge lv-${t.textLevel}`}>
+                        {TEXT_LEVEL_LABEL[t.textLevel]}
+                      </span>
+                    )}
                   </div>
                 ))}
             </div>

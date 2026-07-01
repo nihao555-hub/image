@@ -162,6 +162,24 @@ button {
 .platform-bar .pnote {
   color: var(--muted);
 }
+.density-tag {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 1px 8px;
+}
+.density-tag.d-clean {
+  background: #eef2ff;
+  color: #4338ca;
+}
+.density-tag.d-balanced {
+  background: #ecfdf5;
+  color: #047857;
+}
+.density-tag.d-rich {
+  background: #fdf2f8;
+  color: #be185d;
+}
 
 .error-bar {
   background: #fef2f2;
@@ -371,6 +389,14 @@ button {
   padding: 1px 6px;
   font-weight: 600;
 }
+.txt-badge.lv-light {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.txt-badge.lv-rich {
+  background: #fdf2f8;
+  color: #be185d;
+}
 
 /* ------------------------------ Gallery ------------------------------- */
 .gallery {
@@ -476,6 +502,12 @@ button {
   border-radius: 5px;
   padding: 1px 6px;
   font-weight: 600;
+}
+.gc-txt.lv-light {
+  background: rgba(29, 78, 216, 0.92);
+}
+.gc-txt.lv-rich {
+  background: rgba(190, 24, 93, 0.92);
 }
 .gc-name {
   font-size: 13px;

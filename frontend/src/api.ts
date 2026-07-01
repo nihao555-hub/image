@@ -1,3 +1,5 @@
+export type TextLevel = 'none' | 'light' | 'rich'
+
 export interface Template {
   id: string
   name: string
@@ -5,6 +7,7 @@ export interface Template {
   category: string
   aspectRatio: string
   hasText: boolean
+  textLevel: TextLevel
   example: string
   guidance: string
 }
@@ -14,6 +17,8 @@ export interface Category {
   name: string
 }
 
+export type TextDensity = 'clean' | 'balanced' | 'rich'
+
 export interface Platform {
   id: string
   name: string
@@ -21,6 +26,7 @@ export interface Platform {
   language: string
   size: string
   aspect: string
+  textDensity: TextDensity
   templates: string[]
   note: string
 }
@@ -88,6 +94,7 @@ export async function generatePrompts(
   hasImage: boolean,
   platform: string,
   language: string,
+  density: string,
 ): Promise<Record<string, string>> {
   const data = await post<{ prompts: Record<string, string> }>('/api/generate-prompts', {
     product,
@@ -95,6 +102,7 @@ export async function generatePrompts(
     has_image: hasImage,
     platform,
     language,
+    density,
   })
   return data.prompts
 }

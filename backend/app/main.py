@@ -9,7 +9,12 @@ from pydantic import BaseModel
 
 from . import config, grsai
 from .templates import CATEGORIES, TEMPLATES, TEMPLATE_BY_ID
-from .platforms import LANGUAGE_NAMES, PLATFORMS, PLATFORM_BY_ID
+from .platforms import (
+    DENSITY_INSTRUCTIONS,
+    LANGUAGE_NAMES,
+    PLATFORMS,
+    PLATFORM_BY_ID,
+)
 
 app = FastAPI(title="AI E-commerce Image Set Generator")
 
@@ -39,6 +44,7 @@ class GeneratePromptsRequest(BaseModel):
     has_image: bool = False
     platform: str = ""
     language: str = ""
+    density: str = ""
 
 
 class GeneratePromptsResponse(BaseModel):
@@ -90,7 +96,28 @@ async def list_platforms() -> Dict[str, Any]:
     return {"platforms": PLATFORMS}
 
 
-def _fallback_prompt(product: ProductInfo, template_id: str, language: str = "") -> str:
+# How much on-image text to ask for, combining the template's own textLevel with
+# the platform's overall density preference.
+_AMOUNT = {
+    ("light", "clean"): "one very short",
+    ("light", "balanced"): "one short",
+    ("light", "rich"): "a couple of short",
+    ("rich", "clean"): "a few concise",
+    ("rich", "balanced"): "several well-organised",
+    ("rich", "rich"): "generous, densely-organised",
+}
+
+
+def _text_amount(level: str, density: str) -> str:
+    return _AMOUNT.get((level, density), "concise")
+
+
+def _fallback_prompt(
+    product: ProductInfo,
+    template_id: str,
+    language: str = "",
+    density: str = "balanced",
+) -> str:
     tpl = TEMPLATE_BY_ID.get(template_id)
     guidance = tpl["guidance"] if tpl else ""
     parts = []
@@ -108,11 +135,13 @@ def _fallback_prompt(product: ProductInfo, template_id: str, language: str = "")
         extra.append(product.extra)
     extra_str = (". " + ", ".join(extra)) if extra else ""
     text_str = ""
-    if tpl and tpl.get("hasText"):
+    level = tpl.get("textLevel", "none") if tpl else "none"
+    if level != "none":
         lang = LANGUAGE_NAMES.get(language, "English")
+        amount = _text_amount(level, density)
         text_str = (
-            f" Render concise, well-designed marketing copy / callout labels ON "
-            f"the image in {lang}, highlighting the product's key selling points."
+            f" Render {amount} marketing copy / callout labels ON the image in "
+            f"{lang}, highlighting the product's key selling points."
         )
     return f"Professional e-commerce photo of {subject}. {guidance}{extra_str}{text_str}"
 
@@ -142,20 +171,25 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
     if not selected:
         raise HTTPException(status_code=400, detail="No valid templates selected")
 
-    # Resolve platform + on-image text language.
+    # Resolve platform + on-image text language + text density.
     platform = PLATFORM_BY_ID.get(req.platform)
     language = req.language or (platform["language"] if platform else "en")
     lang_name = LANGUAGE_NAMES.get(language, "English")
+    density = req.density or (platform.get("textDensity") if platform else "balanced")
+    if density not in DENSITY_INSTRUCTIONS:
+        density = "balanced"
 
     def _tpl_line(t: Dict[str, Any]) -> str:
-        if t.get("hasText"):
-            text_rule = (
-                f" | ON-IMAGE TEXT REQUIRED: include tasteful, well-composed "
-                f"marketing copy / labels rendered on the image in {lang_name} "
-                f"(short punchy selling points, spelled correctly)."
-            )
-        else:
+        level = t.get("textLevel", "none")
+        if level == "none":
             text_rule = " | NO TEXT: keep the image completely free of any text or logos."
+        else:
+            amount = _text_amount(level, density)
+            text_rule = (
+                f" | ON-IMAGE TEXT ({level.upper()}): render {amount} tasteful, "
+                f"well-composed marketing copy / labels on the image in "
+                f"{lang_name} (correctly spelled selling points)."
+            )
         return f"- id: {t['id']} | name: {t['name']} ({t['en']}) | guidance: {t['guidance']}{text_rule}"
 
     template_desc = "\n".join(_tpl_line(t) for t in selected)
@@ -173,6 +207,7 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         if platform
         else ""
     )
+    density_note = DENSITY_INSTRUCTIONS[density] + "\n"
 
     system = (
         "You are an expert e-commerce product photography art director and prompt "
@@ -184,6 +219,7 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
     user = (
         f"Product info (JSON): {product_desc}\n"
         f"{platform_note}"
+        f"{density_note}"
         f"{image_note}\n\n"
         f"Create one detailed image-generation prompt for EACH of the following "
         f"template types:\n{template_desc}\n\n"
@@ -213,7 +249,9 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
 
     # Ensure every requested template has a prompt.
     for t in selected:
-        prompts.setdefault(t["id"], _fallback_prompt(req.product, t["id"], language))
+        prompts.setdefault(
+            t["id"], _fallback_prompt(req.product, t["id"], language, density)
+        )
 
     return GeneratePromptsResponse(prompts=prompts)
 

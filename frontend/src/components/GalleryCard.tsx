@@ -1,0 +1,47 @@
+import { memo } from 'react'
+import type { Template } from '../api'
+import { TEXT_LEVEL_LABEL } from '../constants'
+
+interface Props {
+  template: Template
+  selected: boolean
+  showImg: boolean
+  onToggle: (id: string) => void
+  onImgError: (id: string) => void
+}
+
+export const GalleryCard = memo(function GalleryCard({
+  template: t,
+  selected,
+  showImg,
+  onToggle,
+  onImgError,
+}: Props) {
+  return (
+    <button
+      className={`gallery-card ${selected ? 'sel' : ''}`}
+      onClick={() => onToggle(t.id)}
+      aria-pressed={selected}
+    >
+      <div className="gc-thumb">
+        {showImg ? (
+          <img
+            src={t.example}
+            alt={t.name}
+            loading="lazy"
+            decoding="async"
+            onError={() => onImgError(t.id)}
+          />
+        ) : (
+          <div className="gc-fallback">{t.name.slice(0, 2)}</div>
+        )}
+        <span className="gc-check">{selected ? '选' : ''}</span>
+        {TEXT_LEVEL_LABEL[t.textLevel] && (
+          <span className={`gc-txt lv-${t.textLevel}`}>{TEXT_LEVEL_LABEL[t.textLevel]}</span>
+        )}
+      </div>
+      <div className="gc-name">{t.name}</div>
+      <div className="gc-en">{t.en}</div>
+    </button>
+  )
+})

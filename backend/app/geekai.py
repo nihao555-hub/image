@@ -22,13 +22,13 @@ def _headers() -> Dict[str, str]:
     }
 
 
-async def submit_edit(prompt: str, image: str, quality: str = "medium") -> str:
+async def submit_edit(prompt: str, image: str, quality: str = "") -> str:
     """Submit an async image-edit task. Returns the task id."""
     payload: Dict[str, Any] = {
         "model": config.GEEKAI_IMAGE_MODEL,
         "prompt": prompt,
         "image": image,
-        "quality": quality,
+        "quality": quality or config.GEEKAI_IMAGE_QUALITY,
         "response_format": "url",
         "async": True,
     }

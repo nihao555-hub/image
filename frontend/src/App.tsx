@@ -12,7 +12,11 @@ import {
   type ProductInfo,
   type TaskResult,
   type Template,
+  getAuth,
+  setAuth,
+  type AuthUser,
 } from './api'
+import { AuthPage } from './components/AuthPage'
 import { GalleryCard } from './components/GalleryCard'
 import { HistoryDrawer } from './components/HistoryDrawer'
 import { ParamsPanel } from './components/ParamsPanel'
@@ -23,6 +27,8 @@ import { WatermarkPage } from './components/WatermarkPage'
 import { newItem, type BatchItem, type TrackedTask } from './types'
 
 function App() {
+  const [user, setUser] = useState<AuthUser | null>(() => getAuth())
+  const [showApi, setShowApi] = useState(false)
   const [mode, setMode] = useState<'watermark' | 'upscale' | 'generate'>('watermark')
   const [templates, setTemplates] = useState<Template[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -40,6 +46,12 @@ function App() {
   const [error, setError] = useState('')
   const pollRef = useRef<number | null>(null)
   const trackedRef = useRef<TrackedTask[]>([])
+
+  useEffect(() => {
+    const onUnauth = () => setUser(null)
+    window.addEventListener('tj-unauth', onUnauth)
+    return () => window.removeEventListener('tj-unauth', onUnauth)
+  }, [])
 
   useEffect(() => {
     fetchTemplates()
@@ -441,6 +453,10 @@ function App() {
     [],
   )
 
+  if (!user) {
+    return <AuthPage onAuth={setUser} />
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -477,6 +493,23 @@ function App() {
             套图生成
           </button>
         </nav>
+        <div className="user-menu">
+          <span className="user-email" title={user.email}>
+            {user.email}
+          </span>
+          <button className="ghost" onClick={() => setShowApi((v) => !v)}>
+            API 接口
+          </button>
+          <button
+            className="ghost"
+            onClick={() => {
+              setAuth(null)
+              setUser(null)
+            }}
+          >
+            退出
+          </button>
+        </div>
         {mode === 'generate' && (
         <div className="topbar-actions">
           <label className="sel-field">
@@ -550,6 +583,32 @@ function App() {
         </div>
         )}
       </header>
+
+      {showApi && (
+        <div className="api-panel">
+          <div className="api-panel-head">
+            <h3>API 接口</h3>
+            <button className="ghost" onClick={() => setShowApi(false)}>
+              关闭
+            </button>
+          </div>
+          <p>
+            用下面的 API Key 可直接调用去水印 / 超清接口（请求头{' '}
+            <code>Authorization: Bearer 你的Key</code>）：
+          </p>
+          <pre className="api-key">{user.api_key}</pre>
+          <pre className="api-example">{`# 提交去水印（超清把 watermark 换成 upscale）
+curl -X POST https://ecom-image-api.onrender.com/api/watermark \\
+  -H "Authorization: Bearer ${user.api_key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"image_base64": "data:image/png;base64,...."}'
+# 返回 {"task_id": "..."}，然后轮询结果：
+curl -X POST https://ecom-image-api.onrender.com/api/result \\
+  -H "Authorization: Bearer ${user.api_key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"ids": ["task_id"]}'`}</pre>
+        </div>
+      )}
 
       {/* Both restore pages stay mounted so their polling keeps running
           when the user switches to another feature tab. */}

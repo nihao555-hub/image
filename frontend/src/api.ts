@@ -71,17 +71,65 @@ export interface TaskResult {
   error?: string
 }
 
+export interface AuthUser {
+  token: string
+  email: string
+  api_key: string
+}
+
+const AUTH_KEY = 'tj-auth'
+
+export function getAuth(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY)
+    return raw ? (JSON.parse(raw) as AuthUser) : null
+  } catch {
+    return null
+  }
+}
+
+export function setAuth(user: AuthUser | null) {
+  if (user) localStorage.setItem(AUTH_KEY, JSON.stringify(user))
+  else localStorage.removeItem(AUTH_KEY)
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const user = getAuth()
+  if (user) headers['Authorization'] = `Bearer ${user.token}`
   const resp = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   })
   if (!resp.ok) {
+    if (resp.status === 401 && user) {
+      setAuth(null)
+      window.dispatchEvent(new Event('tj-unauth'))
+    }
     const text = await resp.text()
     throw new Error(`${resp.status}: ${text}`)
   }
   return resp.json() as Promise<T>
+}
+
+export async function authRequest(
+  kind: 'login' | 'register',
+  email: string,
+  password: string,
+): Promise<AuthUser> {
+  const resp = await fetch(`/api/auth/${kind}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) {
+    throw new Error(
+      typeof data.detail === 'string' ? data.detail : `请求失败 (${resp.status})`,
+    )
+  }
+  return data as AuthUser
 }
 
 export async function fetchTemplates(): Promise<{ templates: Template[]; categories: Category[] }> {

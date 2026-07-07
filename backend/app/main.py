@@ -7,12 +7,12 @@ import re
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, geekai, grsai
+from . import auth, config, geekai, grsai
 from .templates import CATEGORIES, TEMPLATES, TEMPLATE_BY_ID
 from .platforms import (
     DENSITY_INSTRUCTIONS,
@@ -98,12 +98,27 @@ class ResultRequest(BaseModel):
     ids: List[str]
 
 
+class AuthRequest(BaseModel):
+    email: str
+    password: str
+
+
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
 async def health() -> Dict[str, Any]:
     return {"status": "ok", "configured": bool(config.GRSAI_API_KEY)}
+
+
+@app.post("/api/auth/register")
+async def auth_register(req: AuthRequest) -> Dict[str, Any]:
+    return auth.register(req.email, req.password)
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: AuthRequest) -> Dict[str, Any]:
+    return auth.login(req.email, req.password)
 
 
 @app.get("/api/templates")
@@ -183,7 +198,9 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 @app.post("/api/generate-prompts", response_model=GeneratePromptsResponse)
-async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsResponse:
+async def generate_prompts(
+    req: GeneratePromptsRequest, _uid: int = Depends(auth.require_user)
+) -> GeneratePromptsResponse:
     if not req.template_ids:
         raise HTTPException(status_code=400, detail="No template_ids provided")
 
@@ -322,7 +339,9 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
-async def generate(req: GenerateRequest) -> GenerateResponse:
+async def generate(
+    req: GenerateRequest, _uid: int = Depends(auth.require_user)
+) -> GenerateResponse:
     if not req.jobs:
         raise HTTPException(status_code=400, detail="No jobs provided")
 
@@ -452,7 +471,9 @@ async def _submit_restore(
 
 
 @app.post("/api/watermark")
-async def watermark(req: WatermarkRequest) -> Dict[str, str]:
+async def watermark(
+    req: WatermarkRequest, _uid: int = Depends(auth.require_user)
+) -> Dict[str, str]:
     """Submit a single watermark-removal task; the client polls /api/result."""
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
@@ -464,7 +485,9 @@ async def watermark(req: WatermarkRequest) -> Dict[str, str]:
 
 
 @app.post("/api/upscale")
-async def upscale(req: WatermarkRequest) -> Dict[str, str]:
+async def upscale(
+    req: WatermarkRequest, _uid: int = Depends(auth.require_user)
+) -> Dict[str, str]:
     """Submit a single HD-enhancement task; the client polls /api/result."""
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
@@ -479,7 +502,9 @@ async def upscale(req: WatermarkRequest) -> Dict[str, str]:
 
 
 @app.post("/api/result")
-async def result(req: ResultRequest) -> Dict[str, Any]:
+async def result(
+    req: ResultRequest, _uid: int = Depends(auth.require_user)
+) -> Dict[str, Any]:
     async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:
         try:
             if task_id.startswith("gk:"):

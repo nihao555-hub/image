@@ -548,6 +548,15 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
                       {x.attempts > 1 && <em>第 {x.attempts} 次尝试</em>}
                     </div>
                   )}
+                  {x.status === 'failed' && (
+                    <button
+                      className="wm-retry-corner"
+                      title="重试这张图片"
+                      onClick={() => void retryImage(active.id, x.id)}
+                    >
+                      ↻
+                    </button>
+                  )}
                   {!active.running && x.status === 'ready' && (
                     <button className="wm-del" title="移除" onClick={() => removeImage(active.id, x.id)}>
                       ×

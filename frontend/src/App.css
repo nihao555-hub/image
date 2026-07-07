@@ -1075,6 +1075,25 @@ button {
 .wm-del:hover {
   background: var(--danger);
 }
+.wm-retry-corner {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  background: var(--danger);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  transition: filter var(--speed);
+}
+.wm-retry-corner:hover {
+  filter: brightness(1.15);
+}
 .wm-card figcaption {
   display: flex;
   align-items: center;

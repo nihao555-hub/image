@@ -388,22 +388,6 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             {failedCount > 0 && <span className="wm-stat-failed">失败 {failedCount}</span>}
           </div>
           <div className="wm-actions">
-            <div className="wm-mode" role="group" aria-label="处理模式">
-              <button
-                className={active.mode === 'pro' ? 'on' : ''}
-                disabled={active.running}
-                onClick={() => patchTask(active.id, (t) => ({ ...t, mode: 'pro' }))}
-              >
-                品质模式
-              </button>
-              <button
-                className={active.mode === 'fast' ? 'on' : ''}
-                disabled={active.running}
-                onClick={() => patchTask(active.id, (t) => ({ ...t, mode: 'fast' }))}
-              >
-                快速模式
-              </button>
-            </div>
             <button className="secondary" onClick={() => inputRef.current?.click()} disabled={active.running}>
               添加图片
             </button>

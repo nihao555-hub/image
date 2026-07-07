@@ -250,6 +250,27 @@ export function WatermarkPage() {
     [applyImagePatches, ensurePolling, patchTask, submitOne],
   )
 
+  const retryImage = useCallback(
+    async (taskId: string, imgId: string) => {
+      const task = tasksRef.current.find((t) => t.id === taskId)
+      const img = task?.images.find((x) => x.id === imgId)
+      if (!img || img.status !== 'failed') return
+      patchTask(taskId, (t) => ({
+        ...t,
+        running: true,
+        images: t.images.map((x) =>
+          x.id === imgId
+            ? { ...x, status: 'processing', attempts: 0, taskId: '', progress: 0, resultUrl: '', error: '' }
+            : x,
+        ),
+      }))
+      const submitted = await submitOne({ ...img, status: 'processing', attempts: 0, taskId: '' })
+      applyImagePatches(taskId, [submitted])
+      ensurePolling()
+    },
+    [applyImagePatches, ensurePolling, patchTask, submitOne],
+  )
+
   useEffect(() => {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
@@ -421,6 +442,11 @@ export function WatermarkPage() {
                   <a className="download" href={x.resultUrl} target="_blank" rel="noreferrer" download>
                     下载
                   </a>
+                )}
+                {x.status === 'failed' && (
+                  <button className="secondary wm-retry" onClick={() => void retryImage(active.id, x.id)}>
+                    重试
+                  </button>
                 )}
               </figure>
             ))}

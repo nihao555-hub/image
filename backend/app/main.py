@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, grsai
+from . import config, geekai, grsai
 from .templates import CATEGORIES, TEMPLATES, TEMPLATE_BY_ID
 from .platforms import (
     DENSITY_INSTRUCTIONS,
@@ -378,21 +378,22 @@ async def watermark(req: WatermarkRequest) -> Dict[str, str]:
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
     try:
-        task_id = await grsai.submit_draw(
+        task_id = await geekai.submit_edit(
             prompt=WATERMARK_PROMPT,
-            aspect_ratio="auto",
-            quality="auto",
-            urls=[req.image_base64],
+            image=req.image_base64,
         )
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
-    return {"task_id": task_id}
+    # Prefix marks the provider so /api/result can route the poll.
+    return {"task_id": f"gk:{task_id}"}
 
 
 @app.post("/api/result")
 async def result(req: ResultRequest) -> Dict[str, Any]:
     async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:
         try:
+            if task_id.startswith("gk:"):
+                return task_id, await geekai.get_result(task_id[3:])
             data = await grsai.get_result(task_id)
             d = data.get("data", {})
             return task_id, {

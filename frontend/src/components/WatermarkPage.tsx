@@ -497,7 +497,9 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
                     {x.name}
                   </span>
                   <span className={`wm-status st-${x.status}`} title={x.error || undefined}>
-                    {STATUS_LABEL[x.status]}
+                    {x.status === 'processing'
+                      ? `处理中 ${Math.min(x.progress, 99)}%`
+                      : STATUS_LABEL[x.status]}
                   </span>
                 </figcaption>
                 {x.status === 'done' && x.resultUrl && (

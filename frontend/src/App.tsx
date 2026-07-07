@@ -19,9 +19,11 @@ import { ParamsPanel } from './components/ParamsPanel'
 import { ResultsPanel } from './components/ResultsPanel'
 import { CATEGORY_TYPES, DENSITIES, LANGUAGES, MAX_ATTEMPTS, TEXT_LEVEL_LABEL } from './constants'
 import { useHistory } from './hooks/useHistory'
+import { WatermarkPage } from './components/WatermarkPage'
 import { newItem, type BatchItem, type TrackedTask } from './types'
 
 function App() {
+  const [mode, setMode] = useState<'watermark' | 'generate'>('watermark')
   const [templates, setTemplates] = useState<Template[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [platforms, setPlatforms] = useState<Platform[]>([])
@@ -443,12 +445,33 @@ function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="logo">AI</span>
+          <span className="logo" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="4" />
+              <circle cx="9" cy="9" r="1.6" fill="currentColor" stroke="none" />
+              <path d="m21 15-4.2-4.2a1.5 1.5 0 0 0-2.1 0L7 18.5" />
+            </svg>
+          </span>
           <div>
-            <h1>AI 电商套图生成器</h1>
-            <p>选平台 · 传商品图 · 一键生成整套合规电商图</p>
+            <h1>图匠</h1>
+            <p>电商图片工作台 · 批量去水印 / 套图生成</p>
           </div>
         </div>
+        <nav className="mode-tabs" aria-label="功能切换">
+          <button
+            className={mode === 'watermark' ? 'on' : ''}
+            onClick={() => setMode('watermark')}
+          >
+            批量去水印
+          </button>
+          <button
+            className={mode === 'generate' ? 'on' : ''}
+            onClick={() => setMode('generate')}
+          >
+            套图生成
+          </button>
+        </nav>
+        {mode === 'generate' && (
         <div className="topbar-actions">
           <label className="sel-field">
             平台
@@ -519,9 +542,12 @@ function App() {
             {generating ? `生成中… ${doneCount}/${totalJobs}` : `批量生成 · ${totalJobs} 张`}
           </button>
         </div>
+        )}
       </header>
 
-      {platform && (
+      {mode === 'watermark' && <WatermarkPage />}
+
+      {mode === 'generate' && platform && (
         <div className="platform-bar">
           {activeItem && <span className="cur-item">当前商品：{activeItem.name}</span>}
           <b>{platform.name}</b>
@@ -534,8 +560,9 @@ function App() {
         </div>
       )}
 
-      {error && <div className="error-bar">{error}</div>}
+      {mode === 'generate' && error && <div className="error-bar">{error}</div>}
 
+      {mode === 'generate' && (
       <div className={`layout ${view}`}>
         <ParamsPanel
           items={items}
@@ -623,6 +650,7 @@ function App() {
           )}
         </aside>
       </div>
+      )}
 
       {showHistory && (
         <HistoryDrawer

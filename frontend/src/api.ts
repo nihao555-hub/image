@@ -123,6 +123,11 @@ export async function generateImages(jobs: GenerateJob[]): Promise<TaskInfo[]> {
   return data.tasks
 }
 
+export async function submitWatermark(imageBase64: string): Promise<string> {
+  const data = await post<{ task_id: string }>('/api/watermark', { image_base64: imageBase64 })
+  return data.task_id
+}
+
 export async function fetchResults(ids: string[]): Promise<Record<string, TaskResult>> {
   const data = await post<{ results: Record<string, TaskResult> }>('/api/result', { ids })
   return data.results

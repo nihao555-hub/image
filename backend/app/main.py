@@ -356,6 +356,39 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     return GenerateResponse(tasks=tasks)
 
 
+class WatermarkRequest(BaseModel):
+    # Data URL or http URL of the source image.
+    image_base64: str
+
+
+WATERMARK_PROMPT = (
+    "Remove every watermark, logo overlay, semi-transparent stamp, website URL, "
+    "promotional sticker and any other overlaid marking from this photo, and "
+    "seamlessly reconstruct the areas underneath. IMPORTANT: keep the product "
+    "itself completely untouched — preserve any text, printing, label, pattern "
+    "or decoration that is physically part of the product or its packaging. Do "
+    "not change the composition, colors, lighting, background or any other "
+    "aspect of the image. Output only the clean image."
+)
+
+
+@app.post("/api/watermark")
+async def watermark(req: WatermarkRequest) -> Dict[str, str]:
+    """Submit a single watermark-removal task; the client polls /api/result."""
+    if not req.image_base64:
+        raise HTTPException(status_code=400, detail="image_base64 is required")
+    try:
+        task_id = await grsai.submit_draw(
+            prompt=WATERMARK_PROMPT,
+            aspect_ratio="auto",
+            quality="auto",
+            urls=[req.image_base64],
+        )
+    except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
+        raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
+    return {"task_id": task_id}
+
+
 @app.post("/api/result")
 async def result(req: ResultRequest) -> Dict[str, Any]:
     async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:

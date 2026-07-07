@@ -551,8 +551,14 @@ function App() {
         )}
       </header>
 
-      {mode === 'watermark' && <WatermarkPage key="watermark" feature="watermark" />}
-      {mode === 'upscale' && <WatermarkPage key="upscale" feature="upscale" />}
+      {/* Both restore pages stay mounted so their polling keeps running
+          when the user switches to another feature tab. */}
+      <div style={{ display: mode === 'watermark' ? 'contents' : 'none' }}>
+        <WatermarkPage feature="watermark" />
+      </div>
+      <div style={{ display: mode === 'upscale' ? 'contents' : 'none' }}>
+        <WatermarkPage feature="upscale" />
+      </div>
 
       {mode === 'generate' && platform && (
         <div className="platform-bar">

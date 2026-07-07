@@ -56,6 +56,51 @@ function readFile(file: File): Promise<string> {
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
+// Tasks are persisted per feature so progress and results survive tab
+// switches and page reloads. Source dataUrls are dropped when the payload
+// exceeds the localStorage quota.
+function storageKey(feature: RestoreFeature) {
+  return `tj-tasks-${feature}`
+}
+
+function loadTasks(feature: RestoreFeature): WmTask[] | null {
+  try {
+    const raw = localStorage.getItem(storageKey(feature))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as WmTask[]
+    if (!Array.isArray(parsed) || !parsed.length) return null
+    return parsed.map((t) => ({
+      ...t,
+      images: (t.images ?? []).map((x) => ({
+        ...x,
+        // A submit interrupted by a reload cannot be resumed without its source.
+        status: x.status === 'processing' && !x.taskId ? 'failed' : x.status,
+      })),
+    }))
+  } catch {
+    return null
+  }
+}
+
+function saveTasks(feature: RestoreFeature, tasks: WmTask[]) {
+  const slim = (dropDataUrl: boolean) =>
+    JSON.stringify(
+      tasks.map((t) => ({
+        ...t,
+        images: t.images.map((x) => (dropDataUrl ? { ...x, dataUrl: '' } : x)),
+      })),
+    )
+  try {
+    localStorage.setItem(storageKey(feature), slim(false))
+  } catch {
+    try {
+      localStorage.setItem(storageKey(feature), slim(true))
+    } catch {
+      // Storage unavailable; keep in-memory state only.
+    }
+  }
+}
+
 const STATUS_LABEL: Record<WmStatus, string> = {
   ready: '待处理',
   processing: '处理中',
@@ -76,9 +121,12 @@ function taskProgress(t: WmTask): number {
 
 export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
   const text = FEATURE_TEXT[feature]
-  const [tasks, setTasks] = useState<WmTask[]>(() => [
-    { id: uid(), name: '任务 1', createdAt: Date.now(), running: false, mode: 'pro', images: [] },
-  ])
+  const [tasks, setTasks] = useState<WmTask[]>(
+    () =>
+      loadTasks(feature) ?? [
+        { id: uid(), name: '任务 1', createdAt: Date.now(), running: false, mode: 'pro', images: [] },
+      ],
+  )
   const [activeId, setActiveId] = useState(() => '')
   const [error, setError] = useState('')
   const tasksRef = useRef<WmTask[]>([])
@@ -312,6 +360,36 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
     [applyImagePatches, ensurePolling, patchTask, submitOne],
   )
 
+  // Batch download every finished image of the task.
+  const downloadAll = useCallback(async (taskId: string) => {
+    const task = tasksRef.current.find((t) => t.id === taskId)
+    if (!task) return
+    const done = task.images.filter((x) => x.status === 'done' && x.resultUrl)
+    for (const img of done) {
+      try {
+        const blob = await (await fetch(img.resultUrl)).blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = img.name || 'image.png'
+        a.click()
+        URL.revokeObjectURL(url)
+      } catch {
+        window.open(img.resultUrl, '_blank', 'noreferrer')
+      }
+    }
+  }, [])
+
+  // Resume polling for tasks that were still running before a reload.
+  useEffect(() => {
+    if (tasksRef.current.some((t) => t.running)) ensurePolling()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ensurePolling])
+
+  useEffect(() => {
+    saveTasks(feature, tasks)
+  }, [feature, tasks])
+
   useEffect(() => {
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current)
@@ -391,6 +469,11 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             <button className="secondary" onClick={() => inputRef.current?.click()} disabled={active.running}>
               添加图片
             </button>
+            {doneCount > 0 && (
+              <button className="secondary" onClick={() => void downloadAll(active.id)}>
+                下载全部 · {doneCount} 张
+              </button>
+            )}
             {!active.running && failedCount > 0 && (
               <button className="secondary wm-retry-all" onClick={() => void retryFailed(active.id)}>
                 重试失败 · {failedCount} 张

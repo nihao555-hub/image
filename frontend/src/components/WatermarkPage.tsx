@@ -250,11 +250,11 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
     pollRef.current = window.setInterval(() => void poll(), 4000)
   }, [poll])
 
-  const start = useCallback(
-    async (taskId: string) => {
+  const startWith = useCallback(
+    async (taskId: string, statuses: WmStatus[]) => {
       const task = tasksRef.current.find((t) => t.id === taskId)
       if (!task) return
-      const targets = task.images.filter((x) => x.status === 'ready' || x.status === 'failed')
+      const targets = task.images.filter((x) => statuses.includes(x.status))
       if (!targets.length) return
       setError('')
       const targetIds = new Set(targets.map((x) => x.id))
@@ -275,6 +275,17 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       ensurePolling()
     },
     [applyImagePatches, ensurePolling, patchTask, submitOne],
+  )
+
+  const start = useCallback(
+    (taskId: string) => startWith(taskId, ['ready', 'failed']),
+    [startWith],
+  )
+
+  // Batch retry: resubmit every failed image of the task at once.
+  const retryFailed = useCallback(
+    (taskId: string) => startWith(taskId, ['failed']),
+    [startWith],
   )
 
   const retryImage = useCallback(
@@ -396,6 +407,11 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             <button className="secondary" onClick={() => inputRef.current?.click()} disabled={active.running}>
               添加图片
             </button>
+            {!active.running && failedCount > 0 && (
+              <button className="secondary wm-retry-all" onClick={() => void retryFailed(active.id)}>
+                重试失败 · {failedCount} 张
+              </button>
+            )}
             <button
               className="primary big"
               onClick={() => void start(active.id)}

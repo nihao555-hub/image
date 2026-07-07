@@ -388,23 +388,27 @@ WATERMARK_PROMPT = (
 )
 
 UPSCALE_PROMPT = (
-    "This is a photo-enhancement task, not an image-generation task. "
-    "Reproduce this exact photo with dramatically higher clarity: remove blur "
-    "and noise, sharpen edges, recover fine detail and make all text, numbers, "
-    "parameters, charts and labels in the image crisp and clearly legible. "
-    "STRICT REQUIREMENTS: the content must remain 100% identical — same "
-    "product, same text and wording, same layout, composition, colors, "
-    "lighting and background. Do not add, remove, restyle or reinterpret "
-    "anything; only increase sharpness, resolution and clarity. Output only "
-    "the high-definition photo."
+    "This is an extreme super-resolution / deblurring task, not an "
+    "image-generation task. Reconstruct this exact photo as an ultra-sharp, "
+    "ultra-high-definition 4K image: completely remove blur, defocus, bokeh "
+    "softness, motion blur and noise; restore crisp edges, realistic surface "
+    "textures and fine detail everywhere in the frame, and make all text, "
+    "numbers, parameters, charts and labels crisp and clearly legible. Even "
+    "if the source is severely blurred or out of focus, infer and reconstruct "
+    "the most plausible sharp version of the same scene — every object must "
+    "end up in sharp focus. STRICT REQUIREMENTS: the content must remain "
+    "100% identical — same subjects, same text and wording, same layout, "
+    "composition, colors, lighting and background. Do not add, remove, "
+    "restyle or reinterpret anything; only maximise sharpness, resolution "
+    "and clarity. Output only the ultra-high-definition photo."
 )
 
 
 # gpt-image-2 size constraints: sides are multiples of 16 and <= 3840,
 # total pixels within [655360, 8294400], aspect ratio <= 3:1.
-def _fit_size(w: int, h: int) -> str:
+def _fit_size(w: int, h: int, area: Optional[float] = None) -> str:
     ratio = min(max(w / h, 1 / 3), 3.0)
-    area = float(min(max(w * h, 655_360), 8_294_400))
+    area = float(min(max(area if area is not None else w * h, 655_360), 8_294_400))
     for _ in range(6):
         tw = min(max(int(round((area * ratio) ** 0.5 / 16)) * 16, 16), 3840)
         th = min(max(int(round((area / ratio) ** 0.5 / 16)) * 16, 16), 3840)
@@ -420,25 +424,30 @@ def _fit_size(w: int, h: int) -> str:
     return "1024x1024"
 
 
-def _source_size(image: str) -> str:
+def _source_size(image: str, area: Optional[float] = None) -> str:
     """Derive an output size that keeps the source image's aspect ratio."""
     try:
         if not image.startswith("data:"):
             return "auto"
         raw = base64.b64decode(image.split(",", 1)[1])
         with Image.open(io.BytesIO(raw)) as im:
-            return _fit_size(im.width, im.height)
+            return _fit_size(im.width, im.height, area)
     except Exception:  # noqa: BLE001 - fall back to upstream default
         return "auto"
 
 
-async def _submit_restore(prompt: str, image: str, mode: str) -> str:
+async def _submit_restore(
+    prompt: str, image: str, mode: str, area: Optional[float] = None
+) -> str:
     if mode == "fast":
         return await grsai.submit_nano_banana(
             prompt=prompt, urls=[image], model=config.FAST_IMAGE_MODEL
         )
     return await grsai.submit_draw(
-        prompt=prompt, aspect_ratio=_source_size(image), quality="auto", urls=[image]
+        prompt=prompt,
+        aspect_ratio=_source_size(image, area),
+        quality="auto",
+        urls=[image],
     )
 
 
@@ -460,7 +469,10 @@ async def upscale(req: WatermarkRequest) -> Dict[str, str]:
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
     try:
-        task_id = await _submit_restore(UPSCALE_PROMPT, req.image_base64, req.mode)
+        # Upscale always targets the maximum allowed pixel area (~4K).
+        task_id = await _submit_restore(
+            UPSCALE_PROMPT, req.image_base64, req.mode, area=8_294_400
+        )
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")
     return {"task_id": task_id}

@@ -1,9 +1,12 @@
 import asyncio
+import base64
+import io
 import json
 import os
 import re
 from typing import Any, Dict, List, Optional
 
+from PIL import Image
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -397,13 +400,45 @@ UPSCALE_PROMPT = (
 )
 
 
+# gpt-image-2 size constraints: sides are multiples of 16 and <= 3840,
+# total pixels within [655360, 8294400], aspect ratio <= 3:1.
+def _fit_size(w: int, h: int) -> str:
+    ratio = min(max(w / h, 1 / 3), 3.0)
+    area = float(min(max(w * h, 655_360), 8_294_400))
+    for _ in range(6):
+        tw = min(max(int(round((area * ratio) ** 0.5 / 16)) * 16, 16), 3840)
+        th = min(max(int(round((area / ratio) ** 0.5 / 16)) * 16, 16), 3840)
+        # Rounding can push the ratio slightly past the 3:1 limit.
+        while tw > th * 3:
+            tw -= 16
+        while th > tw * 3:
+            th -= 16
+        px = tw * th
+        if 655_360 <= px <= 8_294_400:
+            return f"{tw}x{th}"
+        area *= 1.15 if px < 655_360 else 0.85
+    return "1024x1024"
+
+
+def _source_size(image: str) -> str:
+    """Derive an output size that keeps the source image's aspect ratio."""
+    try:
+        if not image.startswith("data:"):
+            return "auto"
+        raw = base64.b64decode(image.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as im:
+            return _fit_size(im.width, im.height)
+    except Exception:  # noqa: BLE001 - fall back to upstream default
+        return "auto"
+
+
 async def _submit_restore(prompt: str, image: str, mode: str) -> str:
     if mode == "fast":
         return await grsai.submit_nano_banana(
             prompt=prompt, urls=[image], model=config.FAST_IMAGE_MODEL
         )
     return await grsai.submit_draw(
-        prompt=prompt, aspect_ratio="auto", quality="auto", urls=[image]
+        prompt=prompt, aspect_ratio=_source_size(image), quality="auto", urls=[image]
     )
 
 

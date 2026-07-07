@@ -374,7 +374,14 @@ WATERMARK_PROMPT = (
     "numbers, logos, labels, printing or patterns that are physically part of "
     "the product or its packaging must be preserved exactly as-is. Keep the "
     "same composition, camera angle, lighting, shadows and background. Do not "
-    "beautify, restyle or regenerate anything. Output only the cleaned photo."
+    "beautify, restyle or regenerate anything. EDGE CASES: if the image has "
+    "no overlaid watermark or added text at all, return it unchanged. If the "
+    "image is a marketing poster / promotional composite (a product photo "
+    "surrounded by designed headlines, slogans, price tags, decorative "
+    "graphics or layout elements), extract only the original product photo: "
+    "remove all the added poster text and decorative design elements and "
+    "output a clean photo of the product alone, reconstructing the covered "
+    "areas naturally. Output only the cleaned photo."
 )
 
 UPSCALE_PROMPT = (

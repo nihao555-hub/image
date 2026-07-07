@@ -1075,6 +1075,12 @@ button {
 .wm-del:hover {
   background: var(--danger);
 }
+.wm-task-time,
+.wm-stat-time {
+  color: var(--text-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 .wm-retry-corner {
   position: absolute;
   top: 6px;

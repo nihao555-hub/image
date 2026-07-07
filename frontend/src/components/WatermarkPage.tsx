@@ -1,3 +1,4 @@
+import JSZip from 'jszip'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchResults, submitRestore, type RestoreMode } from '../api'
 
@@ -43,6 +44,19 @@ interface WmTask {
   running: boolean
   mode: RestoreMode
   images: WmImage[]
+  startedAt?: number
+  finishedAt?: number
+}
+
+function fmtDur(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(s / 60)
+  return m > 0 ? `${m}分${s % 60}秒` : `${s}秒`
+}
+
+function taskElapsed(t: WmTask, now: number): string {
+  if (!t.startedAt) return ''
+  return fmtDur((t.running ? now : (t.finishedAt ?? now)) - t.startedAt)
 }
 
 function readFile(file: File): Promise<string> {
@@ -236,7 +250,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
     for (const task of running) {
       const processing = task.images.filter((x) => x.status === 'processing')
       if (!processing.length) {
-        patchTask(task.id, (t) => ({ ...t, running: false }))
+        patchTask(task.id, (t) => ({ ...t, running: false, finishedAt: Date.now() }))
         continue
       }
       // Resubmit images whose previous submit failed but still have attempts left.
@@ -309,6 +323,8 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       patchTask(taskId, (t) => ({
         ...t,
         running: true,
+        startedAt: Date.now(),
+        finishedAt: undefined,
         images: t.images.map((x) =>
           targetIds.has(x.id)
             ? { ...x, status: 'processing', attempts: 0, taskId: '', progress: 0, resultUrl: '', error: '' }
@@ -344,6 +360,8 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       patchTask(taskId, (t) => ({
         ...t,
         running: true,
+        startedAt: t.running ? t.startedAt : Date.now(),
+        finishedAt: undefined,
         images: t.images.map((x) =>
           x.id === imgId
             ? { ...x, status: 'processing', attempts: 0, taskId: '', progress: 0, resultUrl: '', error: '' }
@@ -360,25 +378,62 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
     [applyImagePatches, ensurePolling, patchTask, submitOne],
   )
 
-  // Batch download every finished image of the task.
+  // Batch download: pack every finished image into a single zip so the
+  // browser's multi-download blocking cannot drop files.
+  const [zipping, setZipping] = useState(false)
   const downloadAll = useCallback(async (taskId: string) => {
     const task = tasksRef.current.find((t) => t.id === taskId)
     if (!task) return
     const done = task.images.filter((x) => x.status === 'done' && x.resultUrl)
-    for (const img of done) {
-      try {
-        const blob = await (await fetch(img.resultUrl)).blob()
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = img.name || 'image.png'
-        a.click()
-        URL.revokeObjectURL(url)
-      } catch {
-        window.open(img.resultUrl, '_blank', 'noreferrer')
-      }
+    if (!done.length) return
+    setZipping(true)
+    try {
+      const zip = new JSZip()
+      const blobs = await Promise.all(
+        done.map(async (img) => {
+          try {
+            return await (await fetch(img.resultUrl)).blob()
+          } catch {
+            return null
+          }
+        }),
+      )
+      const used = new Set<string>()
+      const failed: WmImage[] = []
+      done.forEach((img, i) => {
+        const blob = blobs[i]
+        if (!blob) {
+          failed.push(img)
+          return
+        }
+        let name = img.name || `image-${i + 1}.png`
+        if (!/\.(png|jpe?g|webp|gif|bmp)$/i.test(name)) name += '.png'
+        while (used.has(name)) name = `${i + 1}-${name}`
+        used.add(name)
+        zip.file(name, blob)
+      })
+      const out = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(out)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${task.name}.zip`
+      a.click()
+      URL.revokeObjectURL(url)
+      // Any image whose blob could not be fetched is opened directly instead.
+      for (const img of failed) window.open(img.resultUrl, '_blank', 'noreferrer')
+    } finally {
+      setZipping(false)
     }
   }, [])
+
+  // Ticks once per second while any task runs so elapsed timers update.
+  const [now, setNow] = useState(() => Date.now())
+  const anyRunning = tasks.some((t) => t.running)
+  useEffect(() => {
+    if (!anyRunning) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [anyRunning])
 
   // Resume polling for tasks that were still running before a reload.
   useEffect(() => {
@@ -441,6 +496,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
                 </div>
                 <div className="wm-task-meta">
                   {t.images.length ? `${done}/${t.images.length} 张完成` : '空任务'}
+                  {t.startedAt && <span className="wm-task-time">用时 {taskElapsed(t, now)}</span>}
                   {t.running && <span className="wm-task-live">进行中</span>}
                 </div>
                 {t.images.length > 0 && (
@@ -464,14 +520,21 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             </span>
             {doneCount > 0 && <span className="wm-stat-done">完成 {doneCount}</span>}
             {failedCount > 0 && <span className="wm-stat-failed">失败 {failedCount}</span>}
+            {active.startedAt && (
+              <span className="wm-stat-time">用时 {taskElapsed(active, now)}</span>
+            )}
           </div>
           <div className="wm-actions">
             <button className="secondary" onClick={() => inputRef.current?.click()} disabled={active.running}>
               添加图片
             </button>
             {doneCount > 0 && (
-              <button className="secondary" onClick={() => void downloadAll(active.id)}>
-                下载全部 · {doneCount} 张
+              <button
+                className="secondary"
+                disabled={zipping}
+                onClick={() => void downloadAll(active.id)}
+              >
+                {zipping ? '打包中…' : `下载全部 · ${doneCount} 张`}
               </button>
             )}
             {!active.running && failedCount > 0 && (

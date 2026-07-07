@@ -23,7 +23,7 @@ import { WatermarkPage } from './components/WatermarkPage'
 import { newItem, type BatchItem, type TrackedTask } from './types'
 
 function App() {
-  const [mode, setMode] = useState<'watermark' | 'generate'>('watermark')
+  const [mode, setMode] = useState<'watermark' | 'upscale' | 'generate'>('watermark')
   const [templates, setTemplates] = useState<Template[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [platforms, setPlatforms] = useState<Platform[]>([])
@@ -454,7 +454,7 @@ function App() {
           </span>
           <div>
             <h1>图匠</h1>
-            <p>电商图片工作台 · 批量去水印 / 套图生成</p>
+            <p>电商图片工作台 · 批量去水印 / 超清 / 套图生成</p>
           </div>
         </div>
         <nav className="mode-tabs" aria-label="功能切换">
@@ -463,6 +463,12 @@ function App() {
             onClick={() => setMode('watermark')}
           >
             批量去水印
+          </button>
+          <button
+            className={mode === 'upscale' ? 'on' : ''}
+            onClick={() => setMode('upscale')}
+          >
+            超清图片
           </button>
           <button
             className={mode === 'generate' ? 'on' : ''}
@@ -545,7 +551,8 @@ function App() {
         )}
       </header>
 
-      {mode === 'watermark' && <WatermarkPage />}
+      {mode === 'watermark' && <WatermarkPage key="watermark" feature="watermark" />}
+      {mode === 'upscale' && <WatermarkPage key="upscale" feature="upscale" />}
 
       {mode === 'generate' && platform && (
         <div className="platform-bar">

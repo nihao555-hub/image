@@ -1,5 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchResults, submitWatermark } from '../api'
+import { fetchResults, submitRestore, type RestoreMode } from '../api'
+
+export type RestoreFeature = 'watermark' | 'upscale'
+
+const FEATURE_TEXT: Record<
+  RestoreFeature,
+  { action: string; dropTitle: string; dropHint: string }
+> = {
+  watermark: {
+    action: '开始去水印',
+    dropTitle: '点击或拖入图片，批量去除水印',
+    dropHint: '仅去除覆盖在图上的水印 / logo / 网址等，商品本身（含商品自带文字图案）完全不变',
+  },
+  upscale: {
+    action: '开始超清处理',
+    dropTitle: '点击或拖入图片，批量变超清',
+    dropHint: '模糊变高清：锐化细节、去噪，图中文字 / 参数变清晰，内容不会被改变',
+  },
+}
 
 const MAX_FILES = 1000
 const MAX_ATTEMPTS = 5
@@ -23,6 +41,7 @@ interface WmTask {
   name: string
   createdAt: number
   running: boolean
+  mode: RestoreMode
   images: WmImage[]
 }
 
@@ -55,9 +74,10 @@ function taskProgress(t: WmTask): number {
   return Math.round(sum / t.images.length)
 }
 
-export function WatermarkPage() {
+export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
+  const text = FEATURE_TEXT[feature]
   const [tasks, setTasks] = useState<WmTask[]>(() => [
-    { id: uid(), name: '任务 1', createdAt: Date.now(), running: false, images: [] },
+    { id: uid(), name: '任务 1', createdAt: Date.now(), running: false, mode: 'pro', images: [] },
   ])
   const [activeId, setActiveId] = useState(() => '')
   const [error, setError] = useState('')
@@ -89,6 +109,7 @@ export function WatermarkPage() {
       name: `任务 ${tasksRef.current.length + 1}`,
       createdAt: Date.now(),
       running: false,
+      mode: 'pro',
       images: [],
     }
     setTasks((prev) => [t, ...prev])
@@ -136,9 +157,9 @@ export function WatermarkPage() {
   )
 
   // Submit one image; each submit consumes one attempt.
-  const submitOne = useCallback(async (img: WmImage): Promise<WmImage> => {
+  const submitOne = useCallback(async (img: WmImage, mode: RestoreMode): Promise<WmImage> => {
     try {
-      const taskId = await submitWatermark(img.dataUrl)
+      const taskId = await submitRestore(feature, img.dataUrl, mode)
       return { ...img, taskId, status: 'processing', attempts: img.attempts + 1, error: '' }
     } catch (e) {
       const next: WmImage = { ...img, attempts: img.attempts + 1, error: String(e) }
@@ -146,7 +167,7 @@ export function WatermarkPage() {
         ? { ...next, status: 'failed' }
         : { ...next, status: 'processing', taskId: '' }
     }
-  }, [])
+  }, [feature])
 
   const applyImagePatches = useCallback(
     (taskId: string, patched: WmImage[]) => {
@@ -173,7 +194,10 @@ export function WatermarkPage() {
       // Resubmit images whose previous submit failed but still have attempts left.
       const needResubmit = processing.filter((x) => !x.taskId)
       if (needResubmit.length) {
-        applyImagePatches(task.id, await Promise.all(needResubmit.map(submitOne)))
+        applyImagePatches(
+          task.id,
+          await Promise.all(needResubmit.map((x) => submitOne(x, task.mode))),
+        )
       }
     }
 
@@ -213,7 +237,10 @@ export function WatermarkPage() {
         return { ...x, progress: typeof r.progress === 'number' ? r.progress : x.progress }
       })
       if (retries.length) {
-        applyImagePatches(task.id, await Promise.all(retries.map(submitOne)))
+        applyImagePatches(
+          task.id,
+          await Promise.all(retries.map((x) => submitOne(x, task.mode))),
+        )
       }
     }
   }, [applyImagePatches, patchImages, patchTask, submitOne])
@@ -242,7 +269,7 @@ export function WatermarkPage() {
       }))
       // Fire every submission at once — the whole batch is processed in parallel.
       const submitted = await Promise.all(
-        targets.map((x) => submitOne({ ...x, status: 'processing', attempts: 0, taskId: '' })),
+        targets.map((x) => submitOne({ ...x, status: 'processing', attempts: 0, taskId: '' }, task.mode)),
       )
       applyImagePatches(taskId, submitted)
       ensurePolling()
@@ -254,7 +281,7 @@ export function WatermarkPage() {
     async (taskId: string, imgId: string) => {
       const task = tasksRef.current.find((t) => t.id === taskId)
       const img = task?.images.find((x) => x.id === imgId)
-      if (!img || img.status !== 'failed') return
+      if (!task || !img || img.status !== 'failed') return
       patchTask(taskId, (t) => ({
         ...t,
         running: true,
@@ -264,7 +291,10 @@ export function WatermarkPage() {
             : x,
         ),
       }))
-      const submitted = await submitOne({ ...img, status: 'processing', attempts: 0, taskId: '' })
+      const submitted = await submitOne(
+        { ...img, status: 'processing', attempts: 0, taskId: '' },
+        task.mode,
+      )
       applyImagePatches(taskId, [submitted])
       ensurePolling()
     },
@@ -347,6 +377,22 @@ export function WatermarkPage() {
             {failedCount > 0 && <span className="wm-stat-failed">失败 {failedCount}</span>}
           </div>
           <div className="wm-actions">
+            <div className="wm-mode" role="group" aria-label="处理模式">
+              <button
+                className={active.mode === 'pro' ? 'on' : ''}
+                disabled={active.running}
+                onClick={() => patchTask(active.id, (t) => ({ ...t, mode: 'pro' }))}
+              >
+                品质模式
+              </button>
+              <button
+                className={active.mode === 'fast' ? 'on' : ''}
+                disabled={active.running}
+                onClick={() => patchTask(active.id, (t) => ({ ...t, mode: 'fast' }))}
+              >
+                快速模式
+              </button>
+            </div>
             <button className="secondary" onClick={() => inputRef.current?.click()} disabled={active.running}>
               添加图片
             </button>
@@ -355,7 +401,7 @@ export function WatermarkPage() {
               onClick={() => void start(active.id)}
               disabled={active.running || pendingCount === 0}
             >
-              {active.running ? `处理中… ${activeProgress}%` : `开始去水印 · ${pendingCount} 张`}
+              {active.running ? `处理中… ${activeProgress}%` : `${text.action} · ${pendingCount} 张`}
             </button>
           </div>
         </div>
@@ -392,11 +438,11 @@ export function WatermarkPage() {
             }}
           >
             <div className="wm-drop-icon">⇪</div>
-            <h3>点击或拖入图片，批量去除水印</h3>
+            <h3>{text.dropTitle}</h3>
             <p>
               一次最多 {MAX_FILES} 张 · 全部同时处理 · 失败自动重试（最多 {MAX_ATTEMPTS} 次）
               <br />
-              仅去除覆盖在图上的水印 / logo / 网址等，商品自身的文字与装饰会保留
+              {text.dropHint}
             </p>
           </div>
         ) : (

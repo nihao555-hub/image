@@ -359,17 +359,45 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
 class WatermarkRequest(BaseModel):
     # Data URL or http URL of the source image.
     image_base64: str
+    # "pro" (gpt-image-2) or "fast" (nano-banana-2-lite).
+    mode: str = "pro"
 
 
 WATERMARK_PROMPT = (
-    "Remove every watermark, logo overlay, semi-transparent stamp, website URL, "
-    "promotional sticker and any other overlaid marking from this photo, and "
-    "seamlessly reconstruct the areas underneath. IMPORTANT: keep the product "
-    "itself completely untouched — preserve any text, printing, label, pattern "
-    "or decoration that is physically part of the product or its packaging. Do "
-    "not change the composition, colors, lighting, background or any other "
-    "aspect of the image. Output only the clean image."
+    "This is a photo-restoration task, not an image-generation task. "
+    "Reproduce this exact photo pixel-for-pixel, only removing overlaid "
+    "watermarks: semi-transparent stamps, logo overlays, website URLs, shop "
+    "names, promotional banners/badges and any other text or graphics that "
+    "were added on top of the photo, seamlessly reconstructing the areas "
+    "underneath. STRICT REQUIREMENTS: the product itself must remain 100% "
+    "identical — its shape, colors, materials, and especially any text, "
+    "numbers, logos, labels, printing or patterns that are physically part of "
+    "the product or its packaging must be preserved exactly as-is. Keep the "
+    "same composition, camera angle, lighting, shadows and background. Do not "
+    "beautify, restyle or regenerate anything. Output only the cleaned photo."
 )
+
+UPSCALE_PROMPT = (
+    "This is a photo-enhancement task, not an image-generation task. "
+    "Reproduce this exact photo with dramatically higher clarity: remove blur "
+    "and noise, sharpen edges, recover fine detail and make all text, numbers, "
+    "parameters, charts and labels in the image crisp and clearly legible. "
+    "STRICT REQUIREMENTS: the content must remain 100% identical — same "
+    "product, same text and wording, same layout, composition, colors, "
+    "lighting and background. Do not add, remove, restyle or reinterpret "
+    "anything; only increase sharpness, resolution and clarity. Output only "
+    "the high-definition photo."
+)
+
+
+async def _submit_restore(prompt: str, image: str, mode: str) -> str:
+    if mode == "fast":
+        return await grsai.submit_nano_banana(
+            prompt=prompt, urls=[image], model=config.FAST_IMAGE_MODEL
+        )
+    return await grsai.submit_draw(
+        prompt=prompt, aspect_ratio="auto", quality="auto", urls=[image]
+    )
 
 
 @app.post("/api/watermark")
@@ -378,14 +406,22 @@ async def watermark(req: WatermarkRequest) -> Dict[str, str]:
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
     try:
-        task_id = await geekai.submit_edit(
-            prompt=WATERMARK_PROMPT,
-            image=req.image_base64,
-        )
+        task_id = await _submit_restore(WATERMARK_PROMPT, req.image_base64, req.mode)
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
-    # Prefix marks the provider so /api/result can route the poll.
-    return {"task_id": f"gk:{task_id}"}
+    return {"task_id": task_id}
+
+
+@app.post("/api/upscale")
+async def upscale(req: WatermarkRequest) -> Dict[str, str]:
+    """Submit a single HD-enhancement task; the client polls /api/result."""
+    if not req.image_base64:
+        raise HTTPException(status_code=400, detail="image_base64 is required")
+    try:
+        task_id = await _submit_restore(UPSCALE_PROMPT, req.image_base64, req.mode)
+    except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
+        raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")
+    return {"task_id": task_id}
 
 
 @app.post("/api/result")

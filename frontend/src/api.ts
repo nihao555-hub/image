@@ -123,8 +123,17 @@ export async function generateImages(jobs: GenerateJob[]): Promise<TaskInfo[]> {
   return data.tasks
 }
 
-export async function submitWatermark(imageBase64: string): Promise<string> {
-  const data = await post<{ task_id: string }>('/api/watermark', { image_base64: imageBase64 })
+export type RestoreMode = 'pro' | 'fast'
+
+export async function submitRestore(
+  feature: 'watermark' | 'upscale',
+  imageBase64: string,
+  mode: RestoreMode,
+): Promise<string> {
+  const data = await post<{ task_id: string }>(`/api/${feature}`, {
+    image_base64: imageBase64,
+    mode,
+  })
   return data.task_id
 }
 

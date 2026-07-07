@@ -930,6 +930,34 @@ button {
   align-items: center;
   gap: 10px;
 }
+.wm-mode {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface);
+}
+.wm-mode button {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background var(--speed), color var(--speed);
+}
+.wm-mode button + button {
+  border-left: 1px solid var(--border);
+}
+.wm-mode button.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.wm-mode button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .wm-dropzone {
   flex: 1;
   min-height: 420px;

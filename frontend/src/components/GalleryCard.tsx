@@ -35,7 +35,7 @@ export const GalleryCard = memo(function GalleryCard({
         ) : (
           <div className="gc-fallback">{t.name.slice(0, 2)}</div>
         )}
-        <span className="gc-check">{selected ? '选' : ''}</span>
+        <span className="gc-check">✓</span>
         {TEXT_LEVEL_LABEL[t.textLevel] && (
           <span className={`gc-txt lv-${t.textLevel}`}>{TEXT_LEVEL_LABEL[t.textLevel]}</span>
         )}

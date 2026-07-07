@@ -771,19 +771,129 @@ button {
 }
 
 /* ---------------------------- Watermark page --------------------------- */
-.wm-page {
+.wm-layout {
   flex: 1;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 260px 1fr;
   gap: 16px;
   padding: 16px 24px 28px;
   max-width: 1680px;
   width: 100%;
   margin: 0 auto;
+  align-items: start;
 }
-.wm-page .error-bar {
+.wm-sidebar {
+  position: sticky;
+  top: 78px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: calc(100dvh - 96px);
+  overflow-y: auto;
+}
+.wm-sidebar .primary.full {
+  width: 100%;
+}
+.wm-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wm-task {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  padding: 11px 12px;
+  cursor: pointer;
+  transition: border-color var(--speed);
+}
+.wm-task:hover {
+  border-color: var(--border-strong);
+}
+.wm-task.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.wm-task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.wm-task-head strong {
+  font-size: 13px;
+}
+.wm-task-del {
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: var(--r-sm);
+}
+.wm-task-del:hover {
+  color: var(--danger);
+}
+.wm-task-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 4px 0 7px;
+}
+.wm-task-live {
+  color: var(--accent);
+  font-weight: 600;
+}
+.wm-bar {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.wm-bar.big {
+  flex: 1;
+  height: 10px;
+}
+.wm-bar.flat {
+  height: 4px;
+  border: none;
+  border-radius: 0;
+}
+.wm-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.6s ease;
+}
+.wm-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.wm-progress-num {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  min-width: 42px;
+  text-align: right;
+}
+.wm-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.wm-main .error-bar {
   border: 1px solid #f5c6c0;
   border-radius: var(--r-md);
+}
+.wm-stats strong {
+  font-size: 14px;
+  margin-right: 4px;
 }
 .wm-toolbar {
   display: flex;
@@ -1076,5 +1186,12 @@ button {
   }
   .mode-tabs {
     margin-right: 0;
+  }
+  .wm-layout {
+    grid-template-columns: 1fr;
+  }
+  .wm-sidebar {
+    position: static;
+    max-height: none;
   }
 }

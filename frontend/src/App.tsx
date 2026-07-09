@@ -622,13 +622,30 @@ curl -X POST https://ecom-image-api.onrender.com/api/result \\
       {mode === 'generate' && platform && (
         <div className="platform-bar">
           {activeItem && <span className="cur-item">当前商品：{activeItem.name}</span>}
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <b>{platform.name}</b>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <span>已选 {selectedIds.size} 张</span>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <span>导出 {platform.size}</span>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <span className={`density-tag d-${density}`}>
             {DENSITIES.find((d) => d.id === density)?.name}
           </span>
-          <span className="pnote">{platform.note}</span>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
+          <span className="pnote" title={platform.note}>
+            {platform.note}
+          </span>
         </div>
       )}
 
@@ -712,9 +729,7 @@ curl -X POST https://ecom-image-api.onrender.com/api/result \\
                   <div className="compact-item" key={t.id}>
                     <span>{t.name}</span>
                     {TEXT_LEVEL_LABEL[t.textLevel] && (
-                      <span className={`txt-badge lv-${t.textLevel}`}>
-                        {TEXT_LEVEL_LABEL[t.textLevel]}
-                      </span>
+                      <span className="txt-badge">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
                     )}
                   </div>
                 ))}

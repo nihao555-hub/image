@@ -20,6 +20,7 @@ export const GalleryCard = memo(function GalleryCard({
   return (
     <button
       className={`gallery-card ${selected ? 'sel' : ''}`}
+      type="button"
       onClick={() => onToggle(t.id)}
       aria-pressed={selected}
     >
@@ -35,9 +36,9 @@ export const GalleryCard = memo(function GalleryCard({
         ) : (
           <div className="gc-fallback">{t.name.slice(0, 2)}</div>
         )}
-        <span className="gc-check">✓</span>
+        {selected && <span className="gc-check">✓</span>}
         {TEXT_LEVEL_LABEL[t.textLevel] && (
-          <span className={`gc-txt lv-${t.textLevel}`}>{TEXT_LEVEL_LABEL[t.textLevel]}</span>
+          <span className="gc-txt">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
         )}
       </div>
       <div className="gc-name">{t.name}</div>

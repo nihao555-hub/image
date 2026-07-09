@@ -23,8 +23,8 @@ export const GalleryCard = memo(function GalleryCard({
       type="button"
       onClick={() => onToggle(t.id)}
       aria-pressed={selected}
-    >
-      <div className="gc-thumb">
+      >
+        <div className="gc-thumb">
         {showImg ? (
           <img
             src={t.example}
@@ -42,6 +42,7 @@ export const GalleryCard = memo(function GalleryCard({
         )}
       </div>
       <div className="gc-name">{t.name}</div>
+      {t.desc && <div className="gc-desc">{t.desc}</div>}
       <div className="gc-en">{t.en}</div>
     </button>
   )

@@ -38,6 +38,40 @@ CATEGORIES: List[Dict[str, str]] = [
     {"id": "creative", "name": "创意拓展"},
 ]
 
+TEMPLATE_DESCRIPTIONS: Dict[str, str] = {
+    "white_background": "纯白背景·突出主体",
+    "multi_angle": "多角度同框·全面展示",
+    "floating_hero": "悬浮构图·高级主视觉",
+    "transparent_cutout": "白底去背·便于抠图",
+    "lifestyle_scene": "真实场景·营造代入感",
+    "in_use_scene": "使用中状态·强调体验",
+    "outdoor_scene": "户外氛围·轻松自然",
+    "flat_lay": "俯拍平铺·整洁有序",
+    "model_shot": "模特实拍·更有带货感",
+    "closeup_model": "局部特写·突出上身效果",
+    "vertical_lifestyle": "竖版场景·适配短内容",
+    "detail_closeup": "微距细节·放大质感",
+    "material_texture": "材质纹理·凸显手感",
+    "size_reference": "尺寸参照·看清比例",
+    "dimension_infographic": "尺寸标注·信息清晰",
+    "param_table": "参数表格·一眼看懂规格",
+    "exploded_view": "结构拆解·展示内部构造",
+    "feature_infographic": "卖点信息图·一屏讲清",
+    "benefit_banner": "大字卖点·抓住注意力",
+    "comparison": "对比表达·突出优势",
+    "how_to_use": "分步说明·降低理解成本",
+    "promo_poster": "促销海报·氛围感更强",
+    "scene_selling": "场景卖点·兼顾代入与转化",
+    "certification": "资质背书·增强信任",
+    "guarantee": "服务保障·强化安心感",
+    "brand_story": "品牌故事·提升质感",
+    "review_highlight": "用户好评·增强种草感",
+    "color_variants": "多色并列·快速比选",
+    "packaging": "包装展示·传达完整度",
+    "bundle": "套装组合·适合成组销售",
+    "creative_splash": "创意氛围·更吸睛",
+}
+
 
 def _t(
     id: str,
@@ -59,6 +93,7 @@ def _t(
         "hasText": text_level != "none",
         "example": f"examples/{id}.jpg",
         "guidance": guidance,
+        "desc": TEMPLATE_DESCRIPTIONS.get(id, ""),
     }
 
 

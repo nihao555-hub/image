@@ -10,6 +10,7 @@ export interface Template {
   textLevel: TextLevel
   example: string
   guidance: string
+  desc?: string
 }
 
 export interface Category {

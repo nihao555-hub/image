@@ -29,6 +29,7 @@ import { newItem, type BatchItem, type TrackedTask } from './types'
 function App() {
   const [user, setUser] = useState<AuthUser | null>(() => getAuth())
   const [showApi, setShowApi] = useState(false)
+  const [showUserMenu, setShowUserMenu] = useState(false)
   const [mode, setMode] = useState<'watermark' | 'upscale' | 'generate'>('watermark')
   const [templates, setTemplates] = useState<Template[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -44,6 +45,7 @@ function App() {
   const [badExamples, setBadExamples] = useState<Set<string>>(new Set())
   const { history, addEntry, clearHistory } = useHistory()
   const [showHistory, setShowHistory] = useState(false)
+  const [galleryFilter, setGalleryFilter] = useState('all')
   const [error, setError] = useState('')
   const pollRef = useRef<number | null>(null)
   const trackedRef = useRef<TrackedTask[]>([])
@@ -101,6 +103,10 @@ function App() {
     [activeItem?.selectedIds],
   )
   const platform = platforms.find((p) => p.id === platformId)
+  const filteredCategories =
+    galleryFilter === 'all'
+      ? categories
+      : categories.filter((c) => c.id === galleryFilter)
 
   // Group platforms by region (preserving backend order) for the dropdown.
   const platformGroups = useMemo<[string, Platform[]][]>(() => {
@@ -120,6 +126,8 @@ function App() {
     }
     return map
   }, [templates])
+
+  const avatarLetter = (user?.email?.trim().charAt(0) || 'U').toUpperCase()
 
   const updateItem = useCallback((id: string, patch: Partial<BatchItem>) => {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)))
@@ -553,7 +561,16 @@ function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo" aria-hidden="true">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <rect x="3" y="3" width="18" height="18" rx="4" />
               <circle cx="9" cy="9" r="1.6" fill="currentColor" stroke="none" />
               <path d="m21 15-4.2-4.2a1.5 1.5 0 0 0-2.1 0L7 18.5" />
@@ -565,118 +582,87 @@ function App() {
           </div>
         </div>
         <nav className="mode-tabs" aria-label="功能切换">
-          <button
-            className={mode === 'watermark' ? 'on' : ''}
-            onClick={() => setMode('watermark')}
-          >
+          <button className={mode === 'watermark' ? 'on' : ''} onClick={() => setMode('watermark')}>
             批量去水印
           </button>
-          <button
-            className={mode === 'upscale' ? 'on' : ''}
-            onClick={() => setMode('upscale')}
-          >
+          <button className={mode === 'upscale' ? 'on' : ''} onClick={() => setMode('upscale')}>
             超清图片
           </button>
-          <button
-            className={mode === 'generate' ? 'on' : ''}
-            onClick={() => setMode('generate')}
-          >
+          <button className={mode === 'generate' ? 'on' : ''} onClick={() => setMode('generate')}>
             套图生成
           </button>
         </nav>
-        <div className="user-menu">
-          <span className="user-email" title={user.email}>
-            {user.email}
-          </span>
-          <button className="ghost" onClick={() => setShowApi((v) => !v)}>
-            API 接口
-          </button>
-          <button
-            className="ghost"
-            onClick={() => {
-              setAuth(null)
-              setUser(null)
-            }}
+        <div className="topbar-right">
+          <a
+            className="tutorial-link"
+            href="https://docs.devin.ai"
+            target="_blank"
+            rel="noreferrer"
           >
-            退出
-          </button>
-        </div>
-        {mode === 'generate' && (
-        <div className="topbar-actions">
-          <label className="sel-field">
-            平台
-            <select value={platformId} onChange={(e) => applyPlatform(e.target.value)}>
-              {platformGroups.map(([region, ps]) => (
-                <optgroup key={region} label={region}>
-                  {ps.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </label>
-          <label className="sel-field">
-            文字语言
-            <select
-              value={language}
-              onChange={(e) => activeItem && updateItem(activeItem.id, { language: e.target.value })}
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="sel-field">
-            信息密度
-            <select
-              value={density}
-              onChange={(e) => activeItem && updateItem(activeItem.id, { density: e.target.value })}
-            >
-              {DENSITIES.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="sel-field">
-            画质
-            <select value={quality} onChange={(e) => setQuality(e.target.value)}>
-              <option value="auto">自动</option>
-              <option value="low">低</option>
-              <option value="medium">中</option>
-              <option value="high">高</option>
-            </select>
-          </label>
-          {view === 'results' && (
-            <button className="ghost" onClick={() => setView('setup')}>
-              ← 返回配置
-            </button>
-          )}
+            使用教程
+          </a>
           <button
-            className="ghost"
-            onClick={() => setShowHistory((v) => !v)}
-            title="查看历史生成记录"
+            className="ghost header-link"
+            onClick={() => {
+              setShowHistory((v) => !v)
+              setShowUserMenu(false)
+            }}
           >
             历史记录{history.length > 0 ? ` (${history.length})` : ''}
           </button>
-          <button
-            className="primary big"
-            disabled={generating || batchPhase !== 'idle' || templates.length === 0}
-            onClick={generateAll}
-          >
-            {batchPhase === 'prompting'
-              ? '生成提示词中…'
-              : generating
-                ? `生成中… ${doneCount}/${totalJobs}`
-                : `批量生成 · ${totalJobs} 张`}
-          </button>
+          <span className="bell-icon" aria-hidden="true" title="通知">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M15 17H9a3 3 0 0 0 6 0Z" />
+              <path d="M18 16H6c1.1-1 2-2.3 2-4V9a4 4 0 1 1 8 0v3c0 1.7.9 3 2 4Z" />
+            </svg>
+          </span>
+          <div className="avatar-wrap">
+            <button
+              className="avatar-btn"
+              type="button"
+              onClick={() => setShowUserMenu((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={showUserMenu}
+            >
+              {avatarLetter}
+            </button>
+            {showUserMenu && (
+              <div className="avatar-menu" role="menu">
+                <div className="avatar-email">{user.email}</div>
+                <button
+                  type="button"
+                  className="avatar-menu-item"
+                  onClick={() => {
+                    setShowApi((v) => !v)
+                    setShowUserMenu(false)
+                  }}
+                >
+                  API 接口
+                </button>
+                <button
+                  type="button"
+                  className="avatar-menu-item danger"
+                  onClick={() => {
+                    setAuth(null)
+                    setUser(null)
+                    setShowUserMenu(false)
+                  }}
+                >
+                  退出
+                </button>
+              </div>
+            )}
+          </div>
         </div>
-        )}
       </header>
 
       {showApi && (
@@ -714,126 +700,231 @@ curl -X POST https://ecom-image-api.onrender.com/api/result \\
         <WatermarkPage feature="upscale" />
       </div>
 
-      {mode === 'generate' && platform && (
-        <div className="platform-bar">
-          {activeItem && <span className="cur-item">当前图片库：{activeItem.name}</span>}
-          <span className="dot" aria-hidden="true">
-            ·
-          </span>
-          <b>{platform.name}</b>
-          <span className="dot" aria-hidden="true">
-            ·
-          </span>
-          <span>已选 {selectedIds.size} 张</span>
-          <span className="dot" aria-hidden="true">
-            ·
-          </span>
-          <span>导出 {platform.size}</span>
-          <span className="dot" aria-hidden="true">
-            ·
-          </span>
-          <span className={`density-tag d-${density}`}>
-            {DENSITIES.find((d) => d.id === density)?.name}
-          </span>
-          <span className="dot" aria-hidden="true">
-            ·
-          </span>
-          <span className="pnote" title={platform.note}>
-            {platform.note}
-          </span>
-        </div>
-      )}
-
-      {mode === 'generate' && error && <div className="error-bar">{error}</div>}
-
       {mode === 'generate' && (
-      <div className={`layout ${view}`}>
-        <ParamsPanel
-          items={items}
-          activeItem={activeItem}
-          activeItemId={activeItemId}
-          templates={templates}
-          selectedIds={selectedIds}
-          onSelectItem={setActiveItemId}
-          onRemoveItem={removeItem}
-          onAddItem={addItem}
-          onBatchCreate={batchCreate}
-          onUpload={onUpload}
-          onRemoveImage={removeImage}
-          onUpdateItem={updateItem}
-          onUpdateProduct={updateProduct}
-          onSetCategoryType={setCategoryType}
-          onAddSpec={addSpec}
-          onUpdateSpec={updateSpec}
-          onRemoveSpec={removeSpec}
-          onAiGenerate={aiGenerate}
-          onAiGenerateAll={aiGenerateAll}
-        />
+        <>
+          {error && <div className="error-bar">{error}</div>}
+          <div className={`layout ${view}`}>
+            <ParamsPanel
+              items={items}
+              activeItem={activeItem}
+              activeItemId={activeItemId}
+              templates={templates}
+              selectedIds={selectedIds}
+              onSelectItem={setActiveItemId}
+              onRemoveItem={removeItem}
+              onAddItem={addItem}
+              onBatchCreate={batchCreate}
+              onUpload={onUpload}
+              onRemoveImage={removeImage}
+              onUpdateItem={updateItem}
+              onUpdateProduct={updateProduct}
+              onSetCategoryType={setCategoryType}
+              onAddSpec={addSpec}
+              onUpdateSpec={updateSpec}
+              onRemoveSpec={removeSpec}
+              onAiGenerate={aiGenerate}
+              onAiGenerateAll={aiGenerateAll}
+            />
 
-        {view === 'results' && (
-          <ResultsPanel tasks={tasks} results={results} doneCount={doneCount} />
-        )}
+            {view === 'results' && (
+              <ResultsPanel tasks={tasks} results={results} doneCount={doneCount} />
+            )}
 
-        {/* Template gallery: big in setup, compact list in results */}
-        <aside className={`panel gallery ${view === 'results' ? 'compact' : ''}`}>
-          <div className="panel-head">
-            <h2>套图类型</h2>
-            <div className="gallery-actions">
-              <span className="hint">已选 {selectedIds.size}</span>
-              {platform && (
-                <button className="tiny" onClick={() => applyPlatform(platformId)}>
-                  推荐套图
-                </button>
-              )}
-              <button className="tiny" onClick={selectAll}>
-                全选
-              </button>
-              <button className="tiny" onClick={clearAll}>
-                清空
-              </button>
-            </div>
-          </div>
-
-          {view === 'setup' ? (
-            <div className="gallery-scroll">
-              {categories.map((c) => {
-                const list = templatesByCat[c.id] || []
-                if (!list.length) return null
-                return (
-                  <section className="gallery-cat" key={c.id}>
-                    <h3>{c.name}</h3>
-                    <div className="gallery-grid">
-                      {list.map((t) => (
-                        <GalleryCard
-                          key={t.id}
-                          template={t}
-                          selected={selectedIds.has(t.id)}
-                          showImg={!badExamples.has(t.id)}
-                          onToggle={toggleTemplate}
-                          onImgError={markBad}
-                        />
+            <aside className={`panel gallery ${view === 'results' ? 'compact' : ''}`}>
+              <div className="gallery-config">
+                <div className="gallery-config-row">
+                  <label className="sel-field">
+                    平台
+                    <select value={platformId} onChange={(e) => applyPlatform(e.target.value)}>
+                      {platformGroups.map(([region, ps]) => (
+                        <optgroup key={region} label={region}>
+                          {ps.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </optgroup>
                       ))}
+                    </select>
+                  </label>
+                  <label className="sel-field">
+                    文字语言
+                    <select
+                      value={language}
+                      onChange={(e) =>
+                        activeItem && updateItem(activeItem.id, { language: e.target.value })
+                      }
+                    >
+                      {LANGUAGES.map((l) => (
+                        <option key={l.id} value={l.id}>
+                          {l.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="sel-field">
+                    信息密度
+                    <select
+                      value={density}
+                      onChange={(e) =>
+                        activeItem && updateItem(activeItem.id, { density: e.target.value })
+                      }
+                    >
+                      {DENSITIES.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="sel-field">
+                    画质
+                    <select value={quality} onChange={(e) => setQuality(e.target.value)}>
+                      <option value="auto">自动</option>
+                      <option value="low">低</option>
+                      <option value="medium">中</option>
+                      <option value="high">高</option>
+                    </select>
+                  </label>
+                  <button className="secondary recommend-btn" onClick={() => applyPlatform(platformId)}>
+                    智能推荐
+                  </button>
+                  {view === 'results' && (
+                    <button className="ghost" onClick={() => setView('setup')}>
+                      ← 返回配置
+                    </button>
+                  )}
+                  <button
+                    className="primary big"
+                    disabled={generating || batchPhase !== 'idle' || templates.length === 0}
+                    onClick={generateAll}
+                  >
+                    {batchPhase === 'prompting'
+                      ? '生成提示词中…'
+                      : generating
+                        ? `生成中… ${doneCount}/${totalJobs}`
+                        : `批量生成 · ${totalJobs} 张`}
+                  </button>
+                </div>
+              </div>
+
+              {platform && (
+                <div className="platform-bar">
+                  <span className="cur-item">当前图片库：{activeItem?.name}</span>
+                  <span className="dot" aria-hidden="true">
+                    ·
+                  </span>
+                  <b>{platform.name}</b>
+                  <span className="dot" aria-hidden="true">
+                    ·
+                  </span>
+                  <span>已选 {selectedIds.size} 张</span>
+                  <span className="dot" aria-hidden="true">
+                    ·
+                  </span>
+                  <span>导出 {platform.size}</span>
+                  <span className="dot" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className={`density-tag d-${density}`}>
+                    {DENSITIES.find((d) => d.id === density)?.name}
+                  </span>
+                  <span className="dot" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="pnote" title={platform.note}>
+                    {platform.note}
+                  </span>
+                </div>
+              )}
+
+              {view === 'setup' ? (
+                <>
+                  <div className="panel-head gallery-head">
+                    <div className="gallery-head-left">
+                      <h2>套图类型</h2>
+                      <span className="hint">已选 {selectedIds.size}</span>
                     </div>
-                  </section>
-                )
-              })}
-            </div>
-          ) : (
-            <div className="compact-list">
-              {templates
-                .filter((t) => selectedIds.has(t.id))
-                .map((t) => (
-                  <div className="compact-item" key={t.id}>
-                    <span>{t.name}</span>
-                    {TEXT_LEVEL_LABEL[t.textLevel] && (
-                      <span className="txt-badge">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
-                    )}
+                    <div className="gallery-actions">
+                      <button className="tiny" onClick={selectAll}>
+                        全选
+                      </button>
+                      <button className="tiny" onClick={clearAll}>
+                        清空
+                      </button>
+                    </div>
                   </div>
-                ))}
-            </div>
-          )}
-        </aside>
-      </div>
+
+                  <div className="category-tabs" role="tablist" aria-label="分类筛选">
+                    <button
+                      type="button"
+                      className={galleryFilter === 'all' ? 'on' : ''}
+                      onClick={() => setGalleryFilter('all')}
+                    >
+                      全部类型
+                    </button>
+                    {categories.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className={galleryFilter === c.id ? 'on' : ''}
+                        onClick={() => setGalleryFilter(c.id)}
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="gallery-scroll">
+                    {filteredCategories.map((c) => {
+                      const list = templatesByCat[c.id] || []
+                      if (!list.length) return null
+                      return (
+                        <section className="gallery-cat" key={c.id}>
+                          <h3>
+                            {c.name} ({list.length})
+                          </h3>
+                          <div className="gallery-grid">
+                            {list.map((t) => (
+                              <GalleryCard
+                                key={t.id}
+                                template={t}
+                                selected={selectedIds.has(t.id)}
+                                showImg={!badExamples.has(t.id)}
+                                onToggle={toggleTemplate}
+                                onImgError={markBad}
+                              />
+                            ))}
+                          </div>
+                        </section>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div className="compact-list">
+                  {templates
+                    .filter((t) => selectedIds.has(t.id))
+                    .map((t) => (
+                      <div className="compact-item" key={t.id}>
+                        <span>{t.name}</span>
+                        {TEXT_LEVEL_LABEL[t.textLevel] && (
+                          <span className="txt-badge">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
+                        )}
+                      </div>
+                    ))}
+                </div>
+              )}
+
+              <div className="gallery-bottom-hint">
+                <span>选择您需要的套图类型，建议 6–12 个类型以获得最佳效果</span>
+                <button className="ghost" type="button" onClick={generateAll}>
+                  查看生成预览 →
+                </button>
+              </div>
+            </aside>
+          </div>
+        </>
       )}
 
       {showHistory && (

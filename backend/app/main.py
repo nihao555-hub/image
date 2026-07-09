@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+from math import gcd
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
@@ -19,6 +20,7 @@ from .platforms import (
     LANGUAGE_NAMES,
     PLATFORMS,
     PLATFORM_BY_ID,
+    resolve_aspect,
 )
 
 app = FastAPI(title="AI E-commerce Image Set Generator")
@@ -75,6 +77,7 @@ class GenerateJob(BaseModel):
     template_id: str
     prompt: str
     aspectRatio: str = "1024x1024"
+    platform: str = ""
     quality: str = "auto"
     image_base64: Optional[str] = None
     label: str = ""
@@ -197,6 +200,31 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _aspect_orientation(aspect: str) -> str:
+    m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
+    if not m:
+        return "square"
+    w = int(m.group(1))
+    h = int(m.group(2))
+    if w < h:
+        return "portrait"
+    if w > h:
+        return "landscape"
+    return "square"
+
+
+def _aspect_ratio_label(aspect: str) -> str:
+    m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
+    if not m:
+        return "1:1"
+    w = int(m.group(1))
+    h = int(m.group(2))
+    d = gcd(w, h)
+    if d <= 0:
+        return "1:1"
+    return f"{w // d}:{h // d}"
+
+
 @app.post("/api/generate-prompts", response_model=GeneratePromptsResponse)
 async def generate_prompts(
     req: GeneratePromptsRequest, _uid: int = Depends(auth.require_user)
@@ -260,6 +288,20 @@ async def generate_prompts(
         if platform
         else ""
     )
+    platform_aspect_note = ""
+    if platform:
+        aspect = str(platform.get("aspect") or "").strip()
+        orientation = _aspect_orientation(aspect)
+        ratio = _aspect_ratio_label(aspect)
+        if orientation == "portrait":
+            aspect_desc = f"PORTRAIT {ratio} (vertical) — compose all images for a vertical frame."
+        elif orientation == "landscape":
+            aspect_desc = (
+                f"LANDSCAPE {ratio} (horizontal) — compose all images for a horizontal frame."
+            )
+        else:
+            aspect_desc = f"SQUARE {ratio} — compose all images for a square frame."
+        platform_aspect_note = f"Target output orientation: {aspect_desc}\n"
     density_note = DENSITY_INSTRUCTIONS[density] + "\n"
 
     specs = [s for s in req.product.specs if (s.k or s.v)]
@@ -287,6 +329,7 @@ async def generate_prompts(
     user_text = (
         f"Product info (JSON): {product_desc}\n"
         f"{platform_note}"
+        f"{platform_aspect_note}"
         f"{density_note}"
         f"{params_note}"
         f"{image_note}\n\n"
@@ -352,13 +395,14 @@ async def generate(
 
     async def _submit(job: GenerateJob) -> TaskInfo:
         urls = [job.image_base64] if job.image_base64 else None
+        aspect_ratio = resolve_aspect(job.platform, job.aspectRatio)
         # Retry the submission a few times to ride out transient upstream errors.
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
                 task_id = await grsai.submit_draw(
                     prompt=job.prompt,
-                    aspect_ratio=job.aspectRatio,
+                    aspect_ratio=aspect_ratio,
                     quality=job.quality,
                     urls=urls,
                 )

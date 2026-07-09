@@ -52,6 +52,7 @@ export interface GenerateJob {
   template_id: string
   prompt: string
   aspectRatio: string
+  platform?: string
   quality: string
   image_base64?: string | null
   label: string

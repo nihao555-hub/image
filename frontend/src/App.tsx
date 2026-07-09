@@ -290,6 +290,18 @@ function App() {
 
   const templateName = (tid: string) => templates.find((t) => t.id === tid)?.name || tid
 
+  const resolveAspect = (platformAspect: string | undefined, templateAspect: string): string => {
+    const fallback = templateAspect?.trim() || '1024x1024'
+    const aspect = platformAspect?.trim()
+    if (!aspect) return fallback
+    const match = aspect.match(/^\s*(\d+)\s*[x×]\s*(\d+)\s*$/)
+    if (!match) return fallback
+    const w = Number(match[1])
+    const h = Number(match[2])
+    if (w !== h) return aspect
+    return fallback
+  }
+
   const generatePromptsForItem = useCallback(
     async (item: BatchItem) => {
       const prompts = await generatePrompts(
@@ -457,8 +469,10 @@ function App() {
       }
       const mergedPrompts = { ...item.prompts, ...(promptCache.get(item.id) || {}) }
       const orderedSel = templates.map((t) => t.id).filter((id) => item.selectedIds.includes(id))
+      const platform = platforms.find((p) => p.id === item.platformId)
       for (const tid of orderedSel) {
         const tpl = templates.find((t) => t.id === tid)
+        const templateAspect = tpl?.aspectRatio || '1024x1024'
         const prompt =
           mergedPrompts[tid] ||
           `Professional e-commerce photo of ${item.product.name || 'the product'}. ${
@@ -467,7 +481,8 @@ function App() {
         jobs.push({
           template_id: tid,
           prompt,
-          aspectRatio: tpl?.aspectRatio || '1024x1024',
+          aspectRatio: resolveAspect(platform?.aspect, templateAspect),
+          platform: item.platformId,
           quality,
           image_base64: item.images[0] ?? null,
           label: `${item.name} · ${tpl?.name || tid}`,

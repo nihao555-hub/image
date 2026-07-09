@@ -15,6 +15,7 @@ modulates each template's own textLevel:
   information-dense, text-heavy 卖点长图.
 """
 
+import re
 from typing import Any, Dict, List
 
 PLATFORMS: List[Dict[str, Any]] = [
@@ -815,3 +816,29 @@ DENSITY_INSTRUCTIONS: Dict[str, str] = {
         "descriptive lines, while still looking clean and legible."
     ),
 }
+
+
+def _aspect_orientation(aspect: str) -> str:
+    m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
+    if not m:
+        return "square"
+    w = int(m.group(1))
+    h = int(m.group(2))
+    if w < h:
+        return "portrait"
+    if w > h:
+        return "landscape"
+    return "square"
+
+
+def resolve_aspect(platform_id: str, template_aspect: str) -> str:
+    template_aspect = (template_aspect or "").strip() or "1024x1024"
+    platform = PLATFORM_BY_ID.get(platform_id or "")
+    if not platform:
+        return template_aspect
+    aspect = str(platform.get("aspect") or "").strip()
+    if not aspect:
+        return template_aspect
+    if _aspect_orientation(aspect) != "square":
+        return aspect
+    return template_aspect

@@ -37,6 +37,7 @@ function App() {
   const [items, setItems] = useState<BatchItem[]>([newItem()])
   const [activeItemId, setActiveItemId] = useState<string>('')
   const [view, setView] = useState<'setup' | 'results'>('setup')
+  const [batchPhase, setBatchPhase] = useState<'idle' | 'prompting' | 'generating'>('idle')
   const [generating, setGenerating] = useState(false)
   const [tasks, setTasks] = useState<TrackedTask[]>([])
   const [results, setResults] = useState<Record<string, TaskResult>>({})
@@ -289,6 +290,22 @@ function App() {
 
   const templateName = (tid: string) => templates.find((t) => t.id === tid)?.name || tid
 
+  const generatePromptsForItem = useCallback(
+    async (item: BatchItem) => {
+      const prompts = await generatePrompts(
+        item.product,
+        item.selectedIds,
+        item.images.length > 0,
+        item.platformId,
+        item.language,
+        item.density,
+        item.images[0] ?? null,
+      )
+      return prompts
+    },
+    [],
+  )
+
   const aiGenerate = useCallback(
     async (item: BatchItem) => {
       if (item.selectedIds.length === 0) {
@@ -298,22 +315,14 @@ function App() {
       setError('')
       updateItem(item.id, { loadingPrompts: true })
       try {
-        const prompts = await generatePrompts(
-          item.product,
-          item.selectedIds,
-          item.images.length > 0,
-          item.platformId,
-          item.language,
-          item.density,
-          item.images[0] ?? null,
-        )
+        const prompts = await generatePromptsForItem(item)
         updateItem(item.id, { prompts: { ...item.prompts, ...prompts }, loadingPrompts: false })
       } catch (e) {
         setError(String(e))
         updateItem(item.id, { loadingPrompts: false })
       }
     },
-    [updateItem],
+    [generatePromptsForItem, updateItem],
   )
 
   const aiGenerateAll = useCallback(async () => {
@@ -329,15 +338,7 @@ function App() {
     await Promise.all(
       targets.map(async (item) => {
         try {
-          const prompts = await generatePrompts(
-            item.product,
-            item.selectedIds,
-            item.images.length > 0,
-            item.platformId,
-            item.language,
-            item.density,
-            item.images[0] ?? null,
-          )
+          const prompts = await generatePromptsForItem(item)
           setItems((prev) =>
             prev.map((it) =>
               it.id === item.id
@@ -353,7 +354,7 @@ function App() {
         }
       }),
     )
-  }, [items])
+  }, [generatePromptsForItem, items])
 
   const startPolling = () => {
     if (pollRef.current) window.clearInterval(pollRef.current)
@@ -410,6 +411,7 @@ function App() {
         if (pollRef.current) window.clearInterval(pollRef.current)
         pollRef.current = null
         setGenerating(false)
+        setBatchPhase('idle')
         addEntry(current, res)
       }
     }
@@ -424,15 +426,41 @@ function App() {
       return
     }
     setError('')
+    setBatchPhase('prompting')
+    const promptCache = new Map<string, Record<string, string>>()
+    const promptErrors: string[] = []
+
+    for (const item of items) {
+      if (item.selectedIds.length === 0) continue
+      const missing = item.selectedIds.filter((id) => !item.prompts[id]?.trim())
+      if (missing.length === 0) continue
+      try {
+        const prompts = await generatePromptsForItem(item)
+        promptCache.set(item.id, prompts)
+        setItems((prev) =>
+          prev.map((it) =>
+            it.id === item.id ? { ...it, prompts: { ...it.prompts, ...prompts } } : it,
+          ),
+        )
+      } catch (e) {
+        promptErrors.push(item.name)
+        setError(String(e))
+      }
+    }
+
     const jobs: GenerateJob[] = []
-    // Each product uses its own selected image types, in gallery order.
     const plan: { item: BatchItem; tid: string }[] = []
     for (const item of items) {
+      if (item.selectedIds.length === 0) continue
+      if (item.selectedIds.some((id) => !item.prompts[id]?.trim() && !promptCache.get(item.id)?.[id])) {
+        continue
+      }
+      const mergedPrompts = { ...item.prompts, ...(promptCache.get(item.id) || {}) }
       const orderedSel = templates.map((t) => t.id).filter((id) => item.selectedIds.includes(id))
       for (const tid of orderedSel) {
         const tpl = templates.find((t) => t.id === tid)
         const prompt =
-          item.prompts[tid] ||
+          mergedPrompts[tid] ||
           `Professional e-commerce photo of ${item.product.name || 'the product'}. ${
             tpl?.guidance || ''
           }`
@@ -447,7 +475,14 @@ function App() {
         plan.push({ item, tid })
       }
     }
-    if (jobs.length === 0) return
+    if (promptErrors.length) {
+      setError(`部分商品提示词生成失败，已跳过：${promptErrors.join('、')}`)
+    }
+    if (jobs.length === 0) {
+      setBatchPhase('idle')
+      return
+    }
+    setBatchPhase('generating')
     setGenerating(true)
     setResults({})
     setTasks([])
@@ -476,6 +511,7 @@ function App() {
     } catch (e) {
       setError(String(e))
       setGenerating(false)
+      setBatchPhase('idle')
     }
   }
 
@@ -615,10 +651,14 @@ function App() {
           </button>
           <button
             className="primary big"
-            disabled={generating || templates.length === 0}
+            disabled={generating || batchPhase !== 'idle' || templates.length === 0}
             onClick={generateAll}
           >
-            {generating ? `生成中… ${doneCount}/${totalJobs}` : `批量生成 · ${totalJobs} 张`}
+            {batchPhase === 'prompting'
+              ? '生成提示词中…'
+              : generating
+                ? `生成中… ${doneCount}/${totalJobs}`
+                : `批量生成 · ${totalJobs} 张`}
           </button>
         </div>
         )}

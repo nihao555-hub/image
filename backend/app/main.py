@@ -230,7 +230,12 @@ async def generate_prompts(
         return f"- id: {t['id']} | name: {t['name']} ({t['en']}) | guidance: {t['guidance']}{text_rule}"
 
     template_desc = "\n".join(_tpl_line(t) for t in selected)
-    product_desc = json.dumps(req.product.model_dump(), ensure_ascii=False)
+    product_data = {
+        k: v
+        for k, v in req.product.model_dump().items()
+        if v not in ("", [], None)
+    }
+    product_desc = json.dumps(product_data, ensure_ascii=False)
     if req.image_base64:
         image_note = (
             "A reference product image is attached below — LOOK AT IT CAREFULLY "

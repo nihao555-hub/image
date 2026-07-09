@@ -164,20 +164,6 @@ export function ParamsPanel({
                 </div>
               )}
             </div>
-            <Field label="商品名称">
-              <input
-                value={activeItem.product.name}
-                placeholder="如：无线蓝牙耳机"
-                onChange={(e) => onUpdateProduct(activeItem.id, { name: e.target.value })}
-              />
-            </Field>
-            <Field label="商品类目">
-              <input
-                value={activeItem.product.category}
-                placeholder="如：数码 / 服饰 / 美妆"
-                onChange={(e) => onUpdateProduct(activeItem.id, { category: e.target.value })}
-              />
-            </Field>
             <Field label="其他要求 / 卖点">
               <textarea
                 rows={3}
@@ -191,6 +177,22 @@ export function ParamsPanel({
           <details className="more-options">
             <summary>更多选项（可选）</summary>
             <div className="more-options-body">
+              <Section title="基本信息">
+                <Field label="商品名称">
+                  <input
+                    value={activeItem.product.name}
+                    placeholder="如：无线蓝牙耳机"
+                    onChange={(e) => onUpdateProduct(activeItem.id, { name: e.target.value })}
+                  />
+                </Field>
+                <Field label="商品类目">
+                  <input
+                    value={activeItem.product.category}
+                    placeholder="如：数码 / 服饰 / 美妆"
+                    onChange={(e) => onUpdateProduct(activeItem.id, { category: e.target.value })}
+                  />
+                </Field>
+              </Section>
               <Section title="规格与变体">
                 <div className="field two">
                   <Field label="SKU / 货号">

@@ -608,123 +608,133 @@ function App() {
 
       {activeItem && (
         <div className="form">
-          <div className="field">
-            <label>商品参考图</label>
-            <label className="ref-dropzone">
-              {activeItem.imageDataUrl ? (
-                <img src={activeItem.imageDataUrl} alt="preview" />
-              ) : (
-                <span>点击上传商品图<br />作为生图参考</span>
-              )}
+          <Section title="基本信息">
+            <div className="field">
+              <label>商品参考图</label>
+              <label className="ref-dropzone">
+                {activeItem.imageDataUrl ? (
+                  <img src={activeItem.imageDataUrl} alt="preview" />
+                ) : (
+                  <span>
+                    点击上传商品图
+                    <br />
+                    作为生图参考
+                  </span>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) onUpload(activeItem.id, f)
+                  }}
+                />
+              </label>
+            </div>
+            <Field label="商品名称">
               <input
-                type="file"
-                accept="image/*"
-                hidden
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) onUpload(activeItem.id, f)
-                }}
-              />
-            </label>
-          </div>
-          <Field label="商品名称">
-            <input
-              value={activeItem.product.name}
-              placeholder="如：无线蓝牙耳机"
-              onChange={(e) => updateProduct(activeItem.id, { name: e.target.value })}
-            />
-          </Field>
-          <Field label="商品类目">
-            <input
-              value={activeItem.product.category}
-              placeholder="如：数码 / 服饰 / 美妆"
-              onChange={(e) => updateProduct(activeItem.id, { category: e.target.value })}
-            />
-          </Field>
-          <div className="field two">
-            <Field label="SKU / 货号">
-              <input
-                value={activeItem.product.sku}
-                placeholder="如：BT-500-BLK"
-                onChange={(e) => updateProduct(activeItem.id, { sku: e.target.value })}
+                value={activeItem.product.name}
+                placeholder="如：无线蓝牙耳机"
+                onChange={(e) => updateProduct(activeItem.id, { name: e.target.value })}
               />
             </Field>
-            <Field label="类目类型">
-              <select
-                value={activeItem.product.categoryType}
-                onChange={(e) => setCategoryType(activeItem.id, e.target.value)}
-              >
-                {CATEGORY_TYPES.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+            <Field label="商品类目">
+              <input
+                value={activeItem.product.category}
+                placeholder="如：数码 / 服饰 / 美妆"
+                onChange={(e) => updateProduct(activeItem.id, { category: e.target.value })}
+              />
             </Field>
-          </div>
-          <Field label="SKU 变体（多色 / 多规格，用逗号分隔）">
-            <input
-              value={activeItem.product.variants}
-              placeholder="如：黑色, 白色, 天空蓝"
-              onChange={(e) => updateProduct(activeItem.id, { variants: e.target.value })}
-            />
-          </Field>
-          <div className="field">
-            <label>
-              规格参数
-              <button className="tiny inline" onClick={() => addSpec(activeItem.id)}>
-                + 加一行
-              </button>
-            </label>
-            {activeItem.product.specs.length === 0 && (
-              <p className="spec-hint">选「类目类型」可自动带出常用参数，或手动添加</p>
-            )}
-            {activeItem.product.specs.map((s, i) => (
-              <div className="spec-row" key={i}>
+          </Section>
+          <Section title="规格与变体">
+            <div className="field two">
+              <Field label="SKU / 货号">
                 <input
-                  className="spec-k"
-                  value={s.k}
-                  placeholder="参数名"
-                  onChange={(e) => updateSpec(activeItem.id, i, { k: e.target.value })}
+                  value={activeItem.product.sku}
+                  placeholder="如：BT-500-BLK"
+                  onChange={(e) => updateProduct(activeItem.id, { sku: e.target.value })}
                 />
-                <input
-                  className="spec-v"
-                  value={s.v}
-                  placeholder="参数值"
-                  onChange={(e) => updateSpec(activeItem.id, i, { v: e.target.value })}
-                />
-                <button
-                  className="spec-del"
-                  title="删除"
-                  onClick={() => removeSpec(activeItem.id, i)}
+              </Field>
+              <Field label="类目类型">
+                <select
+                  value={activeItem.product.categoryType}
+                  onChange={(e) => setCategoryType(activeItem.id, e.target.value)}
                 >
-                  ×
+                  {CATEGORY_TYPES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Field label="SKU 变体（多色 / 多规格，用逗号分隔）">
+              <input
+                value={activeItem.product.variants}
+                placeholder="如：黑色, 白色, 天空蓝"
+                onChange={(e) => updateProduct(activeItem.id, { variants: e.target.value })}
+              />
+            </Field>
+            <div className="field">
+              <label>
+                规格参数
+                <button className="tiny inline" onClick={() => addSpec(activeItem.id)}>
+                  + 加一行
                 </button>
-              </div>
-            ))}
-          </div>
-          <Field label="风格">
-            <input
-              value={activeItem.product.style}
-              placeholder="如：简约 / 高级 / 复古"
-              onChange={(e) => updateProduct(activeItem.id, { style: e.target.value })}
-            />
-          </Field>
-          <Field label="背景 / 场景">
-            <input
-              value={activeItem.product.background}
-              placeholder="如：大理石台面 / 咖啡厅"
-              onChange={(e) => updateProduct(activeItem.id, { background: e.target.value })}
-            />
-          </Field>
-          <Field label="其他要求 / 卖点">
-            <textarea
-              rows={3}
-              value={activeItem.product.extra}
-              placeholder="补充描述、核心卖点、色调等"
-              onChange={(e) => updateProduct(activeItem.id, { extra: e.target.value })}
-            />
-          </Field>
+              </label>
+              {activeItem.product.specs.length === 0 && (
+                <p className="spec-hint">选「类目类型」可自动带出常用参数，或手动添加</p>
+              )}
+              {activeItem.product.specs.map((s, i) => (
+                <div className="spec-row" key={i}>
+                  <input
+                    className="spec-k"
+                    value={s.k}
+                    placeholder="参数名"
+                    onChange={(e) => updateSpec(activeItem.id, i, { k: e.target.value })}
+                  />
+                  <input
+                    className="spec-v"
+                    value={s.v}
+                    placeholder="参数值"
+                    onChange={(e) => updateSpec(activeItem.id, i, { v: e.target.value })}
+                  />
+                  <button
+                    className="spec-del"
+                    title="删除"
+                    onClick={() => removeSpec(activeItem.id, i)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Section>
+          <Section title="风格与要求">
+            <Field label="风格">
+              <input
+                value={activeItem.product.style}
+                placeholder="如：简约 / 高级 / 复古"
+                onChange={(e) => updateProduct(activeItem.id, { style: e.target.value })}
+              />
+            </Field>
+            <Field label="背景 / 场景">
+              <input
+                value={activeItem.product.background}
+                placeholder="如：大理石台面 / 咖啡厅"
+                onChange={(e) => updateProduct(activeItem.id, { background: e.target.value })}
+              />
+            </Field>
+            <Field label="其他要求 / 卖点">
+              <textarea
+                rows={3}
+                value={activeItem.product.extra}
+                placeholder="补充描述、核心卖点、色调等"
+                onChange={(e) => updateProduct(activeItem.id, { extra: e.target.value })}
+              />
+            </Field>
+          </Section>
           <div className="ai-btns">
             <button
               className="secondary"
@@ -752,15 +762,13 @@ function App() {
               {templates
                 .filter((t) => selectedIds.has(t.id))
                 .map((t) => (
-                  <div className="prompt-item" key={t.id}>
-                    <label>
-                      {t.name}
-                      {TEXT_LEVEL_LABEL[t.textLevel] && (
-                        <span className={`txt-badge lv-${t.textLevel}`}>
-                          {TEXT_LEVEL_LABEL[t.textLevel]}
-                        </span>
-                      )}
-                    </label>
+                    <div className="prompt-item" key={t.id}>
+                      <label>
+                        {t.name}
+                        {TEXT_LEVEL_LABEL[t.textLevel] && (
+                          <span className="txt-badge">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
+                        )}
+                      </label>
                     <textarea
                       rows={2}
                       value={activeItem.prompts[t.id] || ''}
@@ -795,9 +803,9 @@ function App() {
           ) : (
             <div className="gc-fallback">{t.name.slice(0, 2)}</div>
           )}
-          <span className="gc-check">{sel ? '选' : ''}</span>
+          {sel && <span className="gc-check">✓</span>}
           {TEXT_LEVEL_LABEL[t.textLevel] && (
-            <span className={`gc-txt lv-${t.textLevel}`}>{TEXT_LEVEL_LABEL[t.textLevel]}</span>
+            <span className="gc-txt">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
           )}
         </div>
         <div className="gc-name">{t.name}</div>
@@ -891,13 +899,30 @@ function App() {
       {platform && (
         <div className="platform-bar">
           {activeItem && <span className="cur-item">当前商品：{activeItem.name}</span>}
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <b>{platform.name}</b>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <span>已选 {selectedIds.size} 张</span>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <span>导出 {platform.size}</span>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
           <span className={`density-tag d-${density}`}>
             {DENSITIES.find((d) => d.id === density)?.name}
           </span>
-          <span className="pnote">{platform.note}</span>
+          <span className="dot" aria-hidden="true">
+            ·
+          </span>
+          <span className="pnote" title={platform.note}>
+            {platform.note}
+          </span>
         </div>
       )}
 
@@ -1003,9 +1028,7 @@ function App() {
                   <div className="compact-item" key={t.id}>
                     <span>{t.name}</span>
                     {TEXT_LEVEL_LABEL[t.textLevel] && (
-                      <span className={`txt-badge lv-${t.textLevel}`}>
-                        {TEXT_LEVEL_LABEL[t.textLevel]}
-                      </span>
+                      <span className="txt-badge">{TEXT_LEVEL_LABEL[t.textLevel]}</span>
                     )}
                   </div>
                 ))}
@@ -1071,6 +1094,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <label>{label}</label>
       {children}
     </div>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="form-section">
+      <div className="form-section-head">{title}</div>
+      <div className="form-section-body">{children}</div>
+    </section>
   )
 }
 

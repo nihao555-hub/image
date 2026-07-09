@@ -107,7 +107,7 @@ export function ParamsPanel({
 
       {activeItem && (
         <div className="form">
-          <Section title="基本信息">
+          <Section title="商品规格">
             <div className="field">
               <label>商品参考图（可多张）</label>
               <label
@@ -164,6 +164,73 @@ export function ParamsPanel({
                 </div>
               )}
             </div>
+            <div className="field two">
+              <Field label="商品类目">
+                <input
+                  value={activeItem.product.category}
+                  placeholder="如：数码 / 服饰 / 美妆"
+                  onChange={(e) => onUpdateProduct(activeItem.id, { category: e.target.value })}
+                />
+              </Field>
+              <Field label="类目类型">
+                <select
+                  value={activeItem.product.categoryType}
+                  onChange={(e) => onSetCategoryType(activeItem.id, e.target.value)}
+                >
+                  {CATEGORY_TYPES.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <Field label="SKU 变体（多色 / 多规格，用逗号分隔）">
+              <input
+                value={activeItem.product.variants}
+                placeholder="如：黑色, 白色, 天空蓝"
+                onChange={(e) => onUpdateProduct(activeItem.id, { variants: e.target.value })}
+              />
+            </Field>
+            <div className="field">
+              <label>
+                规格参数
+                <button
+                  className="tiny inline"
+                  type="button"
+                  onClick={() => onAddSpec(activeItem.id)}
+                >
+                  + 加一行
+                </button>
+              </label>
+              {activeItem.product.specs.length === 0 && (
+                <p className="spec-hint">选「类目类型」可自动带出常用参数，或手动添加</p>
+              )}
+              {activeItem.product.specs.map((s, i) => (
+                <div className="spec-row" key={i}>
+                  <input
+                    className="spec-k"
+                    value={s.k}
+                    placeholder="参数名"
+                    onChange={(e) => onUpdateSpec(activeItem.id, i, { k: e.target.value })}
+                  />
+                  <input
+                    className="spec-v"
+                    value={s.v}
+                    placeholder="参数值"
+                    onChange={(e) => onUpdateSpec(activeItem.id, i, { v: e.target.value })}
+                  />
+                  <button
+                    className="spec-del"
+                    type="button"
+                    title="删除"
+                    onClick={() => onRemoveSpec(activeItem.id, i)}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
             <Field label="其他要求 / 卖点">
               <textarea
                 rows={3}
@@ -177,24 +244,15 @@ export function ParamsPanel({
           <details className="more-options">
             <summary>更多选项（可选）</summary>
             <div className="more-options-body">
-              <Section title="基本信息">
-                <Field label="商品名称">
-                  <input
-                    value={activeItem.product.name}
-                    placeholder="如：无线蓝牙耳机"
-                    onChange={(e) => onUpdateProduct(activeItem.id, { name: e.target.value })}
-                  />
-                </Field>
-                <Field label="商品类目">
-                  <input
-                    value={activeItem.product.category}
-                    placeholder="如：数码 / 服饰 / 美妆"
-                    onChange={(e) => onUpdateProduct(activeItem.id, { category: e.target.value })}
-                  />
-                </Field>
-              </Section>
-              <Section title="规格与变体">
+              <Section title="其他信息">
                 <div className="field two">
+                  <Field label="商品名称">
+                    <input
+                      value={activeItem.product.name}
+                      placeholder="如：无线蓝牙耳机"
+                      onChange={(e) => onUpdateProduct(activeItem.id, { name: e.target.value })}
+                    />
+                  </Field>
                   <Field label="SKU / 货号">
                     <input
                       value={activeItem.product.sku}
@@ -202,81 +260,25 @@ export function ParamsPanel({
                       onChange={(e) => onUpdateProduct(activeItem.id, { sku: e.target.value })}
                     />
                   </Field>
-                  <Field label="类目类型">
-                    <select
-                      value={activeItem.product.categoryType}
-                      onChange={(e) => onSetCategoryType(activeItem.id, e.target.value)}
-                    >
-                      {CATEGORY_TYPES.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
+                </div>
+                <div className="field two">
+                  <Field label="风格">
+                    <input
+                      value={activeItem.product.style}
+                      placeholder="如：简约 / 高级 / 复古"
+                      onChange={(e) => onUpdateProduct(activeItem.id, { style: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="背景 / 场景">
+                    <input
+                      value={activeItem.product.background}
+                      placeholder="如：大理石台面 / 咖啡厅"
+                      onChange={(e) =>
+                        onUpdateProduct(activeItem.id, { background: e.target.value })
+                      }
+                    />
                   </Field>
                 </div>
-                <Field label="SKU 变体（多色 / 多规格，用逗号分隔）">
-                  <input
-                    value={activeItem.product.variants}
-                    placeholder="如：黑色, 白色, 天空蓝"
-                    onChange={(e) => onUpdateProduct(activeItem.id, { variants: e.target.value })}
-                  />
-                </Field>
-                <div className="field">
-                  <label>
-                    规格参数
-                    <button
-                      className="tiny inline"
-                      type="button"
-                      onClick={() => onAddSpec(activeItem.id)}
-                    >
-                      + 加一行
-                    </button>
-                  </label>
-                  {activeItem.product.specs.length === 0 && (
-                    <p className="spec-hint">选「类目类型」可自动带出常用参数，或手动添加</p>
-                  )}
-                  {activeItem.product.specs.map((s, i) => (
-                    <div className="spec-row" key={i}>
-                      <input
-                        className="spec-k"
-                        value={s.k}
-                        placeholder="参数名"
-                        onChange={(e) => onUpdateSpec(activeItem.id, i, { k: e.target.value })}
-                      />
-                      <input
-                        className="spec-v"
-                        value={s.v}
-                        placeholder="参数值"
-                        onChange={(e) => onUpdateSpec(activeItem.id, i, { v: e.target.value })}
-                      />
-                      <button
-                        className="spec-del"
-                        type="button"
-                        title="删除"
-                        onClick={() => onRemoveSpec(activeItem.id, i)}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-              <Section title="风格与要求">
-                <Field label="风格">
-                  <input
-                    value={activeItem.product.style}
-                    placeholder="如：简约 / 高级 / 复古"
-                    onChange={(e) => onUpdateProduct(activeItem.id, { style: e.target.value })}
-                  />
-                </Field>
-                <Field label="背景 / 场景">
-                  <input
-                    value={activeItem.product.background}
-                    placeholder="如：大理石台面 / 咖啡厅"
-                    onChange={(e) => onUpdateProduct(activeItem.id, { background: e.target.value })}
-                  />
-                </Field>
               </Section>
             </div>
           </details>

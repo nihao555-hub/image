@@ -191,6 +191,16 @@ function App() {
     (id: string) => setItems((p) => p.filter((x) => x.id !== id)),
     [],
   )
+  const readFiles = useCallback(async (files: File[]) => {
+    const load = (file: File) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
+        reader.readAsDataURL(file)
+      })
+    return Promise.all(files.map((file) => load(file)))
+  }, [])
   const addItem = useCallback(() => {
     setItems((p) => {
       const cur = p.find((x) => x.id === activeItemId) || p[0]
@@ -209,6 +219,25 @@ function App() {
       ]
     })
   }, [activeItemId])
+
+  const batchCreate = useCallback(
+    async (files: File[]) => {
+      if (!files.length) return
+      const images = await readFiles(files)
+      const base = activeItem
+        ? {
+            platformId: activeItem.platformId,
+            language: activeItem.language,
+            density: activeItem.density,
+            selectedIds: activeItem.selectedIds,
+          }
+        : undefined
+      const item = newItem({ ...base, images })
+      setItems((prev) => [...prev, item])
+      setActiveItemId(item.id)
+    },
+    [activeItem, readFiles],
+  )
 
   // All config edits below apply to the currently active product only.
   const applyPlatform = (id: string) => {
@@ -239,13 +268,24 @@ function App() {
   const clearAll = () => activeItem && updateItem(activeItem.id, { selectedIds: [] })
 
   const onUpload = useCallback(
-    (id: string, file: File) => {
-      const reader = new FileReader()
-      reader.onload = () => updateItem(id, { imageDataUrl: reader.result as string })
-      reader.readAsDataURL(file)
+    async (id: string, files: File[]) => {
+      if (!files.length) return
+      const images = await readFiles(files)
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === id ? { ...it, images: [...it.images, ...images] } : it,
+        ),
+      )
     },
-    [updateItem],
+    [readFiles],
   )
+  const removeImage = useCallback((id: string, index: number) => {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id ? { ...it, images: it.images.filter((_, i) => i !== index) } : it,
+      ),
+    )
+  }, [])
 
   const templateName = (tid: string) => templates.find((t) => t.id === tid)?.name || tid
 
@@ -261,11 +301,11 @@ function App() {
         const prompts = await generatePrompts(
           item.product,
           item.selectedIds,
-          !!item.imageDataUrl,
+          item.images.length > 0,
           item.platformId,
           item.language,
           item.density,
-          item.imageDataUrl,
+          item.images[0] ?? null,
         )
         updateItem(item.id, { prompts: { ...item.prompts, ...prompts }, loadingPrompts: false })
       } catch (e) {
@@ -292,11 +332,11 @@ function App() {
           const prompts = await generatePrompts(
             item.product,
             item.selectedIds,
-            !!item.imageDataUrl,
+            item.images.length > 0,
             item.platformId,
             item.language,
             item.density,
-            item.imageDataUrl,
+            item.images[0] ?? null,
           )
           setItems((prev) =>
             prev.map((it) =>
@@ -401,7 +441,7 @@ function App() {
           prompt,
           aspectRatio: tpl?.aspectRatio || '1024x1024',
           quality,
-          image_base64: item.imageDataUrl,
+          image_base64: item.images[0] ?? null,
           label: `${item.name} · ${tpl?.name || tid}`,
         })
         plan.push({ item, tid })
@@ -621,7 +661,7 @@ curl -X POST https://ecom-image-api.onrender.com/api/result \\
 
       {mode === 'generate' && platform && (
         <div className="platform-bar">
-          {activeItem && <span className="cur-item">当前商品：{activeItem.name}</span>}
+          {activeItem && <span className="cur-item">当前图片库：{activeItem.name}</span>}
           <span className="dot" aria-hidden="true">
             ·
           </span>
@@ -662,7 +702,9 @@ curl -X POST https://ecom-image-api.onrender.com/api/result \\
           onSelectItem={setActiveItemId}
           onRemoveItem={removeItem}
           onAddItem={addItem}
+          onBatchCreate={batchCreate}
           onUpload={onUpload}
+          onRemoveImage={removeImage}
           onUpdateItem={updateItem}
           onUpdateProduct={updateProduct}
           onSetCategoryType={setCategoryType}

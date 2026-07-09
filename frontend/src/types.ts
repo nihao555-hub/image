@@ -3,7 +3,7 @@ import type { GenerateJob, ProductInfo } from './api'
 export interface BatchItem {
   id: string
   name: string
-  imageDataUrl: string | null
+  images: string[]
   product: ProductInfo
   prompts: Record<string, string>
   loadingPrompts: boolean
@@ -55,10 +55,11 @@ export const newItem = (cfg?: {
   language: string
   density: string
   selectedIds: string[]
+  images?: string[]
 }): BatchItem => ({
   id: `item-${itemCounter++}-${Date.now()}`,
-  name: `商品 ${itemCounter - 1}`,
-  imageDataUrl: null,
+  name: `图片库 ${itemCounter - 1}`,
+  images: cfg?.images ? [...cfg.images] : [],
   product: emptyProduct(),
   prompts: {},
   loadingPrompts: false,

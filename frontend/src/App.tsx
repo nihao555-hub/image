@@ -211,23 +211,20 @@ function App() {
     return Promise.all(files.map((file) => load(file)))
   }, [])
   const addItem = useCallback(() => {
-    setItems((p) => {
-      const cur = p.find((x) => x.id === activeItemId) || p[0]
-      return [
-        ...p,
-        newItem(
-          cur
-            ? {
-                platformId: cur.platformId,
-                language: cur.language,
-                density: cur.density,
-                selectedIds: cur.selectedIds,
-              }
-            : undefined,
-        ),
-      ]
-    })
-  }, [activeItemId])
+    const cur = items.find((x) => x.id === activeItemId) || items[0]
+    const item = newItem(
+      cur
+        ? {
+            platformId: cur.platformId,
+            language: cur.language,
+            density: cur.density,
+            selectedIds: cur.selectedIds,
+          }
+        : undefined,
+    )
+    setItems((p) => [...p, item])
+    setActiveItemId(item.id)
+  }, [items, activeItemId])
 
   const batchCreate = useCallback(
     async (files: File[]) => {

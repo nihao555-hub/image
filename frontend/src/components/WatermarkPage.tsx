@@ -1,6 +1,7 @@
 import JSZip from 'jszip'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchResults, submitRestore, type RestoreMode } from '../api'
+import { MAX_ATTEMPTS } from '../constants'
+import { fetchResults, submitRestore, type RestoreMode, type TaskResult } from '../api'
 
 export type RestoreFeature = 'watermark' | 'upscale'
 
@@ -21,7 +22,8 @@ const FEATURE_TEXT: Record<
 }
 
 const MAX_FILES = 1000
-const MAX_ATTEMPTS = 5
+const RESTORE_SUBMIT_CONCURRENCY = 12
+const RESULT_POLL_BATCH_SIZE = 80
 const ASPECT_OPTIONS = [
   { value: '', label: '原图比例' },
   { value: '1:1', label: '1:1' },
@@ -80,6 +82,30 @@ function readFile(file: File): Promise<string> {
 }
 
 const uid = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
+async function runConcurrent<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<void>,
+) {
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const item = items[next]
+      next += 1
+      await worker(item)
+    }
+  })
+  await Promise.all(workers)
+}
+
+async function fetchResultsByBatch(ids: string[]): Promise<Record<string, TaskResult>> {
+  const merged: Record<string, TaskResult> = {}
+  for (let i = 0; i < ids.length; i += RESULT_POLL_BATCH_SIZE) {
+    Object.assign(merged, await fetchResults(ids.slice(i, i + RESULT_POLL_BATCH_SIZE)))
+  }
+  return merged
+}
 
 // Tasks are persisted per feature so progress and results survive tab
 // switches and page reloads. Source dataUrls are dropped when the payload
@@ -164,6 +190,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
   const [activeId, setActiveId] = useState(() => '')
   const [error, setError] = useState('')
   const tasksRef = useRef<WmTask[]>([])
+  const submittingRef = useRef<Set<string>>(new Set())
   const pollRef = useRef<number | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   tasksRef.current = tasks
@@ -263,6 +290,21 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
     [patchImages],
   )
 
+  const submitQueued = useCallback(
+    async (taskId: string, images: WmImage[], mode: RestoreMode, aspectRatio: string) => {
+      await runConcurrent(images, RESTORE_SUBMIT_CONCURRENCY, async (img) => {
+        if (submittingRef.current.has(img.id)) return
+        submittingRef.current.add(img.id)
+        try {
+          applyImagePatches(taskId, [await submitOne(img, mode, aspectRatio)])
+        } finally {
+          submittingRef.current.delete(img.id)
+        }
+      })
+    },
+    [applyImagePatches, submitOne],
+  )
+
   const poll = useCallback(async () => {
     const running = tasksRef.current.filter((t) => t.running)
     if (!running.length) {
@@ -278,11 +320,15 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
         continue
       }
       // Resubmit images whose previous submit failed but still have attempts left.
-      const needResubmit = processing.filter((x) => !x.taskId)
+      const needResubmit = processing.filter(
+        (x) => !x.taskId && !submittingRef.current.has(x.id),
+      )
       if (needResubmit.length) {
-        applyImagePatches(
+        void submitQueued(
           task.id,
-          await Promise.all(needResubmit.map((x) => submitOne(x, task.mode, task.aspectRatio))),
+          needResubmit,
+          task.mode,
+          task.aspectRatio,
         )
       }
     }
@@ -294,12 +340,9 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       .map((x) => x.taskId)
     if (!ids.length) return
 
-    let res: Record<
-      string,
-      { status: string; progress?: number; results: { url: string }[]; failure_reason?: string; error?: string }
-    >
+    let res: Record<string, TaskResult>
     try {
-      res = await fetchResults(ids)
+      res = await fetchResultsByBatch(ids)
     } catch {
       return // transient error, keep polling
     }
@@ -323,13 +366,15 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
         return { ...x, progress: typeof r.progress === 'number' ? r.progress : x.progress }
       })
       if (retries.length) {
-        applyImagePatches(
+        void submitQueued(
           task.id,
-          await Promise.all(retries.map((x) => submitOne(x, task.mode, task.aspectRatio))),
+          retries,
+          task.mode,
+          task.aspectRatio,
         )
       }
     }
-  }, [applyImagePatches, patchImages, patchTask, submitOne])
+  }, [patchImages, patchTask, submitQueued])
 
   const ensurePolling = useCallback(() => {
     if (pollRef.current) return
@@ -355,20 +400,25 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             : x,
         ),
       }))
-      // Fire every submission at once — the whole batch is processed in parallel.
-      const submitted = await Promise.all(
-        targets.map((x) =>
-          submitOne(
-            { ...x, status: 'processing', attempts: 0, taskId: '' },
-            task.mode,
-            task.aspectRatio,
-          ),
-        ),
-      )
-      applyImagePatches(taskId, submitted)
       ensurePolling()
+      await submitQueued(
+        taskId,
+        targets.map((x) =>
+          ({
+            ...x,
+            status: 'processing',
+            attempts: 0,
+            taskId: '',
+            progress: 0,
+            resultUrl: '',
+            error: '',
+          }) as WmImage,
+        ),
+        task.mode,
+        task.aspectRatio,
+      )
     },
-    [applyImagePatches, ensurePolling, patchTask, submitOne],
+    [ensurePolling, patchTask, submitQueued],
   )
 
   const start = useCallback(
@@ -398,15 +448,25 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             : x,
         ),
       }))
-      const submitted = await submitOne(
-        { ...img, status: 'processing', attempts: 0, taskId: '' },
+      ensurePolling()
+      await submitQueued(
+        taskId,
+        [
+          {
+            ...img,
+            status: 'processing',
+            attempts: 0,
+            taskId: '',
+            progress: 0,
+            resultUrl: '',
+            error: '',
+          },
+        ],
         task.mode,
         task.aspectRatio,
       )
-      applyImagePatches(taskId, [submitted])
-      ensurePolling()
     },
-    [applyImagePatches, ensurePolling, patchTask, submitOne],
+    [ensurePolling, patchTask, submitQueued],
   )
 
   // Batch download: pack every finished image into a single zip so the
@@ -633,7 +693,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             <div className="wm-drop-icon">⇪</div>
             <h3>{text.dropTitle}</h3>
             <p>
-              一次最多 {MAX_FILES} 张 · 全部同时处理 · 失败自动重试（最多 {MAX_ATTEMPTS} 次）
+              一次最多 {MAX_FILES} 张 · {RESTORE_SUBMIT_CONCURRENCY} 路并发 · 失败自动重试（最多 {MAX_ATTEMPTS} 次）
               <br />
               {text.dropHint}
             </p>

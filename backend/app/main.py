@@ -35,6 +35,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_MAX_RESTORE_SUBMIT_ATTEMPTS = 3
+_restore_submit_sem = asyncio.Semaphore(config.RESTORE_SUBMIT_CONCURRENCY)
+
 
 # --------------------------------------------------------------------------- #
 # Models
@@ -530,7 +533,7 @@ def _requested_size(aspect: str, area: Optional[float]) -> str:
     return _fit_size(w, h, area)
 
 
-async def _submit_restore(
+async def _submit_restore_once(
     prompt: str,
     image: str,
     mode: str,
@@ -551,6 +554,31 @@ async def _submit_restore(
         quality="auto",
         urls=[image],
     )
+
+
+async def _submit_restore(
+    prompt: str,
+    image: str,
+    mode: str,
+    area: Optional[float] = None,
+    aspect_ratio: str = "",
+) -> str:
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RESTORE_SUBMIT_ATTEMPTS):
+        try:
+            async with _restore_submit_sem:
+                return await _submit_restore_once(
+                    prompt,
+                    image,
+                    mode,
+                    area,
+                    aspect_ratio,
+                )
+        except Exception as exc:  # noqa: BLE001 - retry transient upstream failures
+            last_exc = exc
+            if attempt < _MAX_RESTORE_SUBMIT_ATTEMPTS - 1:
+                await asyncio.sleep(1.5 * (attempt + 1))
+    raise last_exc if last_exc else grsai.GrsaiError("restore submit failed")
 
 
 @app.post("/api/watermark")

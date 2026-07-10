@@ -4,12 +4,14 @@ import io
 import json
 import os
 import re
+from html import escape
 from math import gcd
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -597,6 +599,50 @@ async def upscale(
 async def usage(_uid: int = Depends(auth.require_user)) -> Dict[str, int]:
     counts = auth.get_usage(_uid)
     return {**counts, "total": counts["watermark"] + counts["upscale"]}
+
+
+@app.get("/api/admin/usage", response_class=HTMLResponse)
+async def admin_usage(
+    key: str = "", x_admin_token: str = Header(default="", alias="X-Admin-Token")
+) -> Response:
+    admin_token = os.environ.get("ADMIN_TOKEN", "")
+    if not admin_token or not any(
+        candidate and candidate == admin_token for candidate in (key, x_admin_token)
+    ):
+        return Response(status_code=404)
+
+    rows = auth.list_usage()
+    total_watermark = sum(row["watermark"] for row in rows)
+    total_upscale = sum(row["upscale"] for row in rows)
+    total = total_watermark + total_upscale
+    body_rows = "".join(
+        "<tr>"
+        f"<td>{escape(row['email'])}</td>"
+        f"<td>******{escape(row['api_key'][-6:])}</td>"
+        f"<td>{row['watermark']}</td>"
+        f"<td>{row['upscale']}</td>"
+        f"<td>{row['watermark'] + row['upscale']}</td>"
+        "</tr>"
+        for row in rows
+    )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>使用统计</title></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;margin:32px;color:#202124">
+<h1 style="margin:0 0 8px">使用统计</h1>
+<p style="color:#5f6368">用户 {len(rows)} · 去水印 {total_watermark} 次 · 超清 {total_upscale} 次 · 合计 {total} 次</p>
+<table style="border-collapse:collapse;min-width:720px">
+<thead><tr style="text-align:left;background:#f3f4f6">
+<th style="padding:10px;border:1px solid #ddd">邮箱</th>
+<th style="padding:10px;border:1px solid #ddd">API Key</th>
+<th style="padding:10px;border:1px solid #ddd">去水印</th>
+<th style="padding:10px;border:1px solid #ddd">超清</th>
+<th style="padding:10px;border:1px solid #ddd">合计</th>
+</tr></thead>
+<tbody>{body_rows}</tbody>
+</table>
+</body></html>"""
+    return HTMLResponse(html)
 
 
 @app.post("/api/result")

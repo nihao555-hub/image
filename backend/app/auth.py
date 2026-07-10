@@ -1,8 +1,8 @@
 """User accounts: registration, login and request authentication.
 
-Users live in a local SQLite database. Sessions use an HMAC-signed token;
-every user also gets a permanent API key for programmatic access to the
-watermark / upscale endpoints.
+Users live in MySQL when configured, with local SQLite as a fallback.
+Sessions use an HMAC-signed token; every user also gets a permanent API key
+for programmatic access to the watermark / upscale endpoints.
 """
 
 import base64
@@ -15,11 +15,17 @@ import sqlite3
 import time
 from typing import Any, Dict, Optional
 
+import pymysql
 from fastapi import Header, HTTPException
 
 DB_PATH = os.environ.get("AUTH_DB_PATH", os.path.join(os.path.dirname(__file__), "users.db"))
 SECRET = os.environ.get("AUTH_SECRET", "")
 TOKEN_TTL = 30 * 24 * 3600  # 30 days
+DB_HOST = os.environ.get("DB_HOST", "")
+DB_PORT = int(os.environ.get("DB_PORT", "3306"))
+DB_USER = os.environ.get("DB_USER", "")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_NAME = os.environ.get("DB_NAME", "")
 
 _SECRET_FILE = DB_PATH + ".secret"
 
@@ -37,24 +43,73 @@ def _secret() -> bytes:
     return SECRET.encode()
 
 
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS users ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "email TEXT UNIQUE NOT NULL,"
-        "pw_hash TEXT NOT NULL,"
-        "salt TEXT NOT NULL,"
-        "api_key TEXT UNIQUE NOT NULL,"
-        "created_at INTEGER NOT NULL)"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS usage ("
-        "user_id INTEGER PRIMARY KEY,"
-        "watermark INTEGER NOT NULL DEFAULT 0,"
-        "upscale INTEGER NOT NULL DEFAULT 0)"
-    )
-    return conn
+class _Db:
+    def __init__(self, raw: Any, mysql: bool):
+        self.raw = raw
+        self.mysql = mysql
+
+    def execute(self, query: str, params: tuple = ()) -> Any:
+        if not self.mysql:
+            return self.raw.execute(query, params)
+        cursor = self.raw.cursor()
+        cursor.execute(query.replace("?", "%s"), params)
+        return cursor
+
+    def commit(self) -> None:
+        self.raw.commit()
+
+    def close(self) -> None:
+        self.raw.close()
+
+
+def _db() -> _Db:
+    if DB_HOST:
+        conn = pymysql.connect(
+            host=DB_HOST,
+            port=DB_PORT,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            charset="utf8mb4",
+            autocommit=False,
+        )
+        db = _Db(conn, mysql=True)
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS users ("
+            "id BIGINT PRIMARY KEY AUTO_INCREMENT,"
+            "email VARCHAR(320) UNIQUE NOT NULL,"
+            "pw_hash VARCHAR(128) NOT NULL,"
+            "salt VARCHAR(64) NOT NULL,"
+            "api_key VARCHAR(128) UNIQUE NOT NULL,"
+            "created_at BIGINT NOT NULL)"
+            " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS `usage` ("
+            "user_id BIGINT PRIMARY KEY,"
+            "watermark INT NOT NULL DEFAULT 0,"
+            "upscale INT NOT NULL DEFAULT 0)"
+            " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
+    else:
+        conn = sqlite3.connect(DB_PATH)
+        db = _Db(conn, mysql=False)
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS users ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "email TEXT UNIQUE NOT NULL,"
+            "pw_hash TEXT NOT NULL,"
+            "salt TEXT NOT NULL,"
+            "api_key TEXT UNIQUE NOT NULL,"
+            "created_at INTEGER NOT NULL)"
+        )
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS `usage` ("
+            "user_id INTEGER PRIMARY KEY,"
+            "watermark INTEGER NOT NULL DEFAULT 0,"
+            "upscale INTEGER NOT NULL DEFAULT 0)"
+        )
+    return db
 
 
 def _hash_pw(password: str, salt: str) -> str:
@@ -76,7 +131,7 @@ def register(email: str, password: str) -> Dict[str, Any]:
             (email, _hash_pw(password, salt), salt, api_key, int(time.time())),
         )
         conn.commit()
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, pymysql.err.IntegrityError):
         raise HTTPException(status_code=409, detail="该邮箱已注册，请直接登录")
     finally:
         conn.close()
@@ -140,13 +195,22 @@ def record_usage(uid: int, feature: str) -> None:
     conn = _db()
     try:
         values = (uid, 1, 0) if feature == "watermark" else (uid, 0, 1)
-        conn.execute(
-            "INSERT INTO usage (user_id, watermark, upscale) VALUES (?,?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET "
-            "watermark = usage.watermark + excluded.watermark, "
-            "upscale = usage.upscale + excluded.upscale",
-            values,
-        )
+        if conn.mysql:
+            conn.execute(
+                "INSERT INTO `usage` (user_id, watermark, upscale) VALUES (?,?,?) "
+                "ON DUPLICATE KEY UPDATE "
+                "watermark = watermark + VALUES(watermark), "
+                "upscale = upscale + VALUES(upscale)",
+                values,
+            )
+        else:
+            conn.execute(
+                "INSERT INTO `usage` (user_id, watermark, upscale) VALUES (?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "watermark = `usage`.watermark + excluded.watermark, "
+                "upscale = `usage`.upscale + excluded.upscale",
+                values,
+            )
         conn.commit()
     finally:
         conn.close()
@@ -156,7 +220,7 @@ def get_usage(uid: int) -> Dict[str, int]:
     conn = _db()
     try:
         row = conn.execute(
-            "SELECT watermark, upscale FROM usage WHERE user_id=?", (uid,)
+            "SELECT watermark, upscale FROM `usage` WHERE user_id=?", (uid,)
         ).fetchone()
     finally:
         conn.close()
@@ -164,3 +228,25 @@ def get_usage(uid: int) -> Dict[str, int]:
         "watermark": int(row[0]) if row else 0,
         "upscale": int(row[1]) if row else 0,
     }
+
+
+def list_usage() -> list[Dict[str, Any]]:
+    conn = _db()
+    try:
+        rows = conn.execute(
+            "SELECT u.email, u.api_key, "
+            "COALESCE(x.watermark, 0), COALESCE(x.upscale, 0) "
+            "FROM users u LEFT JOIN `usage` x ON x.user_id = u.id "
+            "ORDER BY (COALESCE(x.watermark, 0) + COALESCE(x.upscale, 0)) DESC, u.email"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [
+        {
+            "email": row[0],
+            "api_key": row[1],
+            "watermark": int(row[2]),
+            "upscale": int(row[3]),
+        }
+        for row in rows
+    ]

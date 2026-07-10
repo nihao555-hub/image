@@ -1,21 +1,28 @@
 import asyncio
+import base64
+import io
 import json
 import os
 import re
+from html import escape
+from math import gcd
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException
+from PIL import Image
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, grsai
+from . import auth, config, geekai, grsai
 from .templates import CATEGORIES, TEMPLATES, TEMPLATE_BY_ID
 from .platforms import (
     DENSITY_INSTRUCTIONS,
     LANGUAGE_NAMES,
     PLATFORMS,
     PLATFORM_BY_ID,
+    resolve_aspect,
 )
 
 app = FastAPI(title="AI E-commerce Image Set Generator")
@@ -72,6 +79,7 @@ class GenerateJob(BaseModel):
     template_id: str
     prompt: str
     aspectRatio: str = "1024x1024"
+    platform: str = ""
     quality: str = "auto"
     image_base64: Optional[str] = None
     label: str = ""
@@ -95,12 +103,27 @@ class ResultRequest(BaseModel):
     ids: List[str]
 
 
+class AuthRequest(BaseModel):
+    email: str
+    password: str
+
+
 # --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
 @app.get("/api/health")
 async def health() -> Dict[str, Any]:
     return {"status": "ok", "configured": bool(config.GRSAI_API_KEY)}
+
+
+@app.post("/api/auth/register")
+async def auth_register(req: AuthRequest) -> Dict[str, Any]:
+    return auth.register(req.email, req.password)
+
+
+@app.post("/api/auth/login")
+async def auth_login(req: AuthRequest) -> Dict[str, Any]:
+    return auth.login(req.email, req.password)
 
 
 @app.get("/api/templates")
@@ -179,8 +202,35 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _aspect_orientation(aspect: str) -> str:
+    m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
+    if not m:
+        return "square"
+    w = int(m.group(1))
+    h = int(m.group(2))
+    if w < h:
+        return "portrait"
+    if w > h:
+        return "landscape"
+    return "square"
+
+
+def _aspect_ratio_label(aspect: str) -> str:
+    m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
+    if not m:
+        return "1:1"
+    w = int(m.group(1))
+    h = int(m.group(2))
+    d = gcd(w, h)
+    if d <= 0:
+        return "1:1"
+    return f"{w // d}:{h // d}"
+
+
 @app.post("/api/generate-prompts", response_model=GeneratePromptsResponse)
-async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsResponse:
+async def generate_prompts(
+    req: GeneratePromptsRequest, _uid: int = Depends(auth.require_user)
+) -> GeneratePromptsResponse:
     if not req.template_ids:
         raise HTTPException(status_code=400, detail="No template_ids provided")
 
@@ -210,7 +260,12 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         return f"- id: {t['id']} | name: {t['name']} ({t['en']}) | guidance: {t['guidance']}{text_rule}"
 
     template_desc = "\n".join(_tpl_line(t) for t in selected)
-    product_desc = json.dumps(req.product.model_dump(), ensure_ascii=False)
+    product_data = {
+        k: v
+        for k, v in req.product.model_dump().items()
+        if v not in ("", [], None)
+    }
+    product_desc = json.dumps(product_data, ensure_ascii=False)
     if req.image_base64:
         image_note = (
             "A reference product image is attached below — LOOK AT IT CAREFULLY "
@@ -235,6 +290,20 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
         if platform
         else ""
     )
+    platform_aspect_note = ""
+    if platform:
+        aspect = str(platform.get("aspect") or "").strip()
+        orientation = _aspect_orientation(aspect)
+        ratio = _aspect_ratio_label(aspect)
+        if orientation == "portrait":
+            aspect_desc = f"PORTRAIT {ratio} (vertical) — compose all images for a vertical frame."
+        elif orientation == "landscape":
+            aspect_desc = (
+                f"LANDSCAPE {ratio} (horizontal) — compose all images for a horizontal frame."
+            )
+        else:
+            aspect_desc = f"SQUARE {ratio} — compose all images for a square frame."
+        platform_aspect_note = f"Target output orientation: {aspect_desc}\n"
     density_note = DENSITY_INSTRUCTIONS[density] + "\n"
 
     specs = [s for s in req.product.specs if (s.k or s.v)]
@@ -262,6 +331,7 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
     user_text = (
         f"Product info (JSON): {product_desc}\n"
         f"{platform_note}"
+        f"{platform_aspect_note}"
         f"{density_note}"
         f"{params_note}"
         f"{image_note}\n\n"
@@ -319,19 +389,22 @@ async def generate_prompts(req: GeneratePromptsRequest) -> GeneratePromptsRespon
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
-async def generate(req: GenerateRequest) -> GenerateResponse:
+async def generate(
+    req: GenerateRequest, _uid: int = Depends(auth.require_user)
+) -> GenerateResponse:
     if not req.jobs:
         raise HTTPException(status_code=400, detail="No jobs provided")
 
     async def _submit(job: GenerateJob) -> TaskInfo:
         urls = [job.image_base64] if job.image_base64 else None
+        aspect_ratio = resolve_aspect(job.platform, job.aspectRatio)
         # Retry the submission a few times to ride out transient upstream errors.
         last_exc: Optional[Exception] = None
         for attempt in range(3):
             try:
                 task_id = await grsai.submit_draw(
                     prompt=job.prompt,
-                    aspect_ratio=job.aspectRatio,
+                    aspect_ratio=aspect_ratio,
                     quality=job.quality,
                     urls=urls,
                 )
@@ -356,10 +429,230 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
     return GenerateResponse(tasks=tasks)
 
 
+class WatermarkRequest(BaseModel):
+    # Data URL or http URL of the source image.
+    image_base64: str
+    # "pro" (gpt-image-2) or "fast" (nano-banana-2-lite).
+    mode: str = "pro"
+    aspectRatio: str = ""
+
+
+WATERMARK_PROMPT = (
+    "This is a photo-restoration task, not an image-generation task. "
+    "Reproduce this exact photo pixel-for-pixel, only removing overlaid "
+    "watermarks: semi-transparent stamps, logo overlays, website URLs, shop "
+    "names, promotional banners/badges and any other text or graphics that "
+    "were added on top of the photo, seamlessly reconstructing the areas "
+    "underneath. STRICT REQUIREMENTS: the product itself must remain 100% "
+    "identical — its shape, colors, materials, and especially any text, "
+    "numbers, logos, labels, printing or patterns that are physically part of "
+    "the product or its packaging must be preserved exactly as-is. Keep the "
+    "same composition, camera angle, lighting, shadows and background. Do not "
+    "beautify, restyle or regenerate anything. EDGE CASES: if the image has "
+    "no overlaid watermark or added text at all, return it unchanged. If the "
+    "image is a marketing poster / promotional composite (a product photo "
+    "surrounded by designed headlines, slogans, price tags, decorative "
+    "graphics or layout elements), extract only the original product photo: "
+    "remove all the added poster text and decorative design elements and "
+    "output a clean photo of the product alone, reconstructing the covered "
+    "areas naturally. Output only the cleaned photo."
+)
+
+UPSCALE_PROMPT = (
+    "This is an extreme super-resolution / deblurring task, not an "
+    "image-generation task. Reconstruct this exact photo as an ultra-sharp, "
+    "ultra-high-definition 4K image: completely remove blur, defocus, bokeh "
+    "softness, motion blur and noise; restore crisp edges, realistic surface "
+    "textures and fine detail everywhere in the frame, and make all text, "
+    "numbers, parameters, charts and labels crisp and clearly legible. Even "
+    "if the source is severely blurred or out of focus, infer and reconstruct "
+    "the most plausible sharp version of the same scene — every object must "
+    "end up in sharp focus. STRICT REQUIREMENTS: the content must remain "
+    "100% identical — same subjects, same text and wording, same layout, "
+    "composition, colors, lighting and background. Do not add, remove, "
+    "restyle or reinterpret anything; only maximise sharpness, resolution "
+    "and clarity. Output only the ultra-high-definition photo."
+)
+
+
+# gpt-image-2 size constraints: sides are multiples of 16 and <= 3840,
+# total pixels within [655360, 8294400], aspect ratio <= 3:1.
+def _fit_size(w: int, h: int, area: Optional[float] = None) -> str:
+    ratio = min(max(w / h, 1 / 3), 3.0)
+    area = float(min(max(area if area is not None else w * h, 655_360), 8_294_400))
+    for _ in range(6):
+        tw = min(max(int(round((area * ratio) ** 0.5 / 16)) * 16, 16), 3840)
+        th = min(max(int(round((area / ratio) ** 0.5 / 16)) * 16, 16), 3840)
+        # Rounding can push the ratio slightly past the 3:1 limit.
+        while tw > th * 3:
+            tw -= 16
+        while th > tw * 3:
+            th -= 16
+        px = tw * th
+        if 655_360 <= px <= 8_294_400:
+            return f"{tw}x{th}"
+        area *= 1.15 if px < 655_360 else 0.85
+    return "1024x1024"
+
+
+def _source_size(image: str, area: Optional[float] = None) -> str:
+    """Derive an output size that keeps the source image's aspect ratio."""
+    try:
+        if not image.startswith("data:"):
+            return "auto"
+        raw = base64.b64decode(image.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as im:
+            return _fit_size(im.width, im.height, area)
+    except Exception:  # noqa: BLE001 - fall back to upstream default
+        return "auto"
+
+
+def _source_area(image: str) -> Optional[float]:
+    try:
+        if not image.startswith("data:"):
+            return None
+        raw = base64.b64decode(image.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as im:
+            return float(im.width * im.height)
+    except Exception:  # noqa: BLE001 - fall back to shape-derived area
+        return None
+
+
+def _requested_size(aspect: str, area: Optional[float]) -> str:
+    token = (aspect or "").strip()
+    match = re.match(r"^\s*(\d+)\s*[:x×]\s*(\d+)\s*$", token)
+    if not match:
+        return ""
+    w = int(match.group(1))
+    h = int(match.group(2))
+    if w <= 0 or h <= 0:
+        return ""
+    return _fit_size(w, h, area)
+
+
+async def _submit_restore(
+    prompt: str,
+    image: str,
+    mode: str,
+    area: Optional[float] = None,
+    aspect_ratio: str = "",
+) -> str:
+    if mode == "fast":
+        return await grsai.submit_nano_banana(
+            prompt=prompt, urls=[image], model=config.FAST_IMAGE_MODEL
+        )
+    requested_size = _requested_size(
+        aspect_ratio,
+        area if area is not None else _source_area(image),
+    )
+    return await grsai.submit_draw(
+        prompt=prompt,
+        aspect_ratio=requested_size or _source_size(image, area),
+        quality="auto",
+        urls=[image],
+    )
+
+
+@app.post("/api/watermark")
+async def watermark(
+    req: WatermarkRequest, _uid: int = Depends(auth.require_user)
+) -> Dict[str, str]:
+    """Submit a single watermark-removal task; the client polls /api/result."""
+    if not req.image_base64:
+        raise HTTPException(status_code=400, detail="image_base64 is required")
+    try:
+        task_id = await _submit_restore(
+            WATERMARK_PROMPT,
+            req.image_base64,
+            req.mode,
+            aspect_ratio=req.aspectRatio,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
+        raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
+    auth.record_usage(_uid, "watermark")
+    return {"task_id": task_id}
+
+
+@app.post("/api/upscale")
+async def upscale(
+    req: WatermarkRequest, _uid: int = Depends(auth.require_user)
+) -> Dict[str, str]:
+    """Submit a single HD-enhancement task; the client polls /api/result."""
+    if not req.image_base64:
+        raise HTTPException(status_code=400, detail="image_base64 is required")
+    try:
+        # Upscale always targets the maximum allowed pixel area (~4K).
+        task_id = await _submit_restore(
+            UPSCALE_PROMPT,
+            req.image_base64,
+            req.mode,
+            area=8_294_400,
+            aspect_ratio=req.aspectRatio,
+        )
+    except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
+        raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")
+    auth.record_usage(_uid, "upscale")
+    return {"task_id": task_id}
+
+
+@app.get("/api/usage")
+async def usage(_uid: int = Depends(auth.require_user)) -> Dict[str, int]:
+    counts = auth.get_usage(_uid)
+    return {**counts, "total": counts["watermark"] + counts["upscale"]}
+
+
+@app.get("/api/admin/usage", response_class=HTMLResponse)
+async def admin_usage(
+    key: str = "", x_admin_token: str = Header(default="", alias="X-Admin-Token")
+) -> Response:
+    admin_token = os.environ.get("ADMIN_TOKEN", "")
+    if not admin_token or not any(
+        candidate and candidate == admin_token for candidate in (key, x_admin_token)
+    ):
+        return Response(status_code=404)
+
+    rows = auth.list_usage()
+    total_watermark = sum(row["watermark"] for row in rows)
+    total_upscale = sum(row["upscale"] for row in rows)
+    total = total_watermark + total_upscale
+    body_rows = "".join(
+        "<tr>"
+        f"<td>{escape(row['email'])}</td>"
+        f"<td>******{escape(row['api_key'][-6:])}</td>"
+        f"<td>{row['watermark']}</td>"
+        f"<td>{row['upscale']}</td>"
+        f"<td>{row['watermark'] + row['upscale']}</td>"
+        "</tr>"
+        for row in rows
+    )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>使用统计</title></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;margin:32px;color:#202124">
+<h1 style="margin:0 0 8px">使用统计</h1>
+<p style="color:#5f6368">用户 {len(rows)} · 去水印 {total_watermark} 次 · 超清 {total_upscale} 次 · 合计 {total} 次</p>
+<table style="border-collapse:collapse;min-width:720px">
+<thead><tr style="text-align:left;background:#f3f4f6">
+<th style="padding:10px;border:1px solid #ddd">邮箱</th>
+<th style="padding:10px;border:1px solid #ddd">API Key</th>
+<th style="padding:10px;border:1px solid #ddd">去水印</th>
+<th style="padding:10px;border:1px solid #ddd">超清</th>
+<th style="padding:10px;border:1px solid #ddd">合计</th>
+</tr></thead>
+<tbody>{body_rows}</tbody>
+</table>
+</body></html>"""
+    return HTMLResponse(html)
+
+
 @app.post("/api/result")
-async def result(req: ResultRequest) -> Dict[str, Any]:
+async def result(
+    req: ResultRequest, _uid: int = Depends(auth.require_user)
+) -> Dict[str, Any]:
     async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:
         try:
+            if task_id.startswith("gk:"):
+                return task_id, await geekai.get_result(task_id[3:])
             data = await grsai.get_result(task_id)
             d = data.get("data", {})
             return task_id, {

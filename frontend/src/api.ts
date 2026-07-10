@@ -10,6 +10,7 @@ export interface Template {
   textLevel: TextLevel
   example: string
   guidance: string
+  desc?: string
 }
 
 export interface Category {
@@ -52,6 +53,7 @@ export interface GenerateJob {
   template_id: string
   prompt: string
   aspectRatio: string
+  platform?: string
   quality: string
   image_base64?: string | null
   label: string
@@ -71,17 +73,71 @@ export interface TaskResult {
   error?: string
 }
 
+export interface AuthUser {
+  token: string
+  email: string
+  api_key: string
+}
+
+export interface Usage {
+  watermark: number
+  upscale: number
+  total: number
+}
+
+const AUTH_KEY = 'tj-auth'
+
+export function getAuth(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY)
+    return raw ? (JSON.parse(raw) as AuthUser) : null
+  } catch {
+    return null
+  }
+}
+
+export function setAuth(user: AuthUser | null) {
+  if (user) localStorage.setItem(AUTH_KEY, JSON.stringify(user))
+  else localStorage.removeItem(AUTH_KEY)
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const user = getAuth()
+  if (user) headers['Authorization'] = `Bearer ${user.token}`
   const resp = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   })
   if (!resp.ok) {
+    if (resp.status === 401 && user) {
+      setAuth(null)
+      window.dispatchEvent(new Event('tj-unauth'))
+    }
     const text = await resp.text()
     throw new Error(`${resp.status}: ${text}`)
   }
   return resp.json() as Promise<T>
+}
+
+export async function authRequest(
+  kind: 'login' | 'register',
+  email: string,
+  password: string,
+): Promise<AuthUser> {
+  const resp = await fetch(`/api/auth/${kind}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  const data = await resp.json().catch(() => ({}))
+  if (!resp.ok) {
+    throw new Error(
+      typeof data.detail === 'string' ? data.detail : `请求失败 (${resp.status})`,
+    )
+  }
+  return data as AuthUser
 }
 
 export async function fetchTemplates(): Promise<{ templates: Template[]; categories: Category[] }> {
@@ -123,7 +179,38 @@ export async function generateImages(jobs: GenerateJob[]): Promise<TaskInfo[]> {
   return data.tasks
 }
 
+export type RestoreMode = 'pro' | 'fast'
+
+export async function submitRestore(
+  feature: 'watermark' | 'upscale',
+  imageBase64: string,
+  mode: RestoreMode,
+  aspect = '',
+): Promise<string> {
+  const data = await post<{ task_id: string }>(`/api/${feature}`, {
+    image_base64: imageBase64,
+    mode,
+    aspectRatio: aspect,
+  })
+  return data.task_id
+}
+
 export async function fetchResults(ids: string[]): Promise<Record<string, TaskResult>> {
   const data = await post<{ results: Record<string, TaskResult> }>('/api/result', { ids })
   return data.results
+}
+
+export async function fetchUsage(): Promise<Usage> {
+  const user = getAuth()
+  const headers: Record<string, string> = {}
+  if (user) headers.Authorization = `Bearer ${user.token}`
+  const resp = await fetch('/api/usage', { headers })
+  if (!resp.ok) {
+    if (resp.status === 401 && user) {
+      setAuth(null)
+      window.dispatchEvent(new Event('tj-unauth'))
+    }
+    throw new Error(`${resp.status}: ${await resp.text()}`)
+  }
+  return resp.json() as Promise<Usage>
 }

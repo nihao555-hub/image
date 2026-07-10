@@ -79,6 +79,39 @@ async def submit_draw(
     return task_id
 
 
+async def submit_nano_banana(
+    prompt: str,
+    urls: Optional[List[str]] = None,
+    model: str = "nano-banana-2-lite",
+    aspect_ratio: str = "auto",
+) -> str:
+    """Submit a Nano Banana image task in polling mode. Returns the task id."""
+    payload: Dict[str, Any] = {
+        "model": model,
+        "prompt": prompt,
+        "aspectRatio": aspect_ratio,
+        "webHook": "-1",
+        "shutProgress": True,
+    }
+    if urls:
+        payload["urls"] = urls
+
+    async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as client:
+        resp = await client.post(
+            f"{config.GRSAI_BASE_URL}/v1/draw/nano-banana",
+            headers=_headers(),
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if data.get("code") != 0:
+        raise GrsaiError(f"Nano banana submit failed: {data}")
+    task_id = data.get("data", {}).get("id")
+    if not task_id:
+        raise GrsaiError(f"No task id returned: {data}")
+    return task_id
+
+
 async def get_result(task_id: str) -> Dict[str, Any]:
     """Poll the result of an image generation task."""
     async with httpx.AsyncClient(timeout=config.REQUEST_TIMEOUT) as client:

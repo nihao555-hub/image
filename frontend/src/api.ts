@@ -186,11 +186,13 @@ export async function submitRestore(
   imageBase64: string,
   mode: RestoreMode,
   aspect = '',
+  prompt = '',
 ): Promise<string> {
   const data = await post<{ task_id: string }>(`/api/${feature}`, {
     image_base64: imageBase64,
     mode,
     aspectRatio: aspect,
+    prompt,
   })
   return data.task_id
 }

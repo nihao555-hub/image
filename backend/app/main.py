@@ -8,12 +8,12 @@ from html import escape
 from math import gcd
 from typing import Any, Dict, List, Optional
 
-from PIL import Image
+from PIL import Image, ImageOps
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import auth, config, geekai, grsai
 from .templates import CATEGORIES, TEMPLATES, TEMPLATE_BY_ID
@@ -34,6 +34,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_MAX_RESTORE_SUBMIT_ATTEMPTS = 3
+_restore_submit_sem = asyncio.Semaphore(config.RESTORE_SUBMIT_CONCURRENCY)
 
 
 # --------------------------------------------------------------------------- #
@@ -435,27 +438,36 @@ class WatermarkRequest(BaseModel):
     # "pro" (gpt-image-2) or "fast" (nano-banana-2-lite).
     mode: str = "pro"
     aspectRatio: str = ""
+    prompt: str = Field(default="", max_length=2000)
 
 
 WATERMARK_PROMPT = (
     "This is a photo-restoration task, not an image-generation task. "
-    "Reproduce this exact photo pixel-for-pixel, only removing overlaid "
-    "watermarks: semi-transparent stamps, logo overlays, website URLs, shop "
-    "names, promotional banners/badges and any other text or graphics that "
-    "were added on top of the photo, seamlessly reconstructing the areas "
-    "underneath. STRICT REQUIREMENTS: the product itself must remain 100% "
+    "Reproduce this exact photo pixel-for-pixel while removing EVERY visible "
+    "character, word, number, symbol, logo, watermark, URL, shop name, price, "
+    "caption, slogan, badge, banner, frame and decorative graphic that is not "
+    "physically part of the product or its packaging. Remove them completely "
+    "regardless of language, size, opacity, position or whether they appear in "
+    "the foreground, background, border or poster layout, seamlessly "
+    "reconstructing every covered area. Perform a final full-frame inspection "
+    "and leave zero non-product text or overlay elements behind. STRICT "
+    "REQUIREMENTS: the product itself must remain 100% "
     "identical — its shape, colors, materials, and especially any text, "
     "numbers, logos, labels, printing or patterns that are physically part of "
-    "the product or its packaging must be preserved exactly as-is. Keep the "
-    "same composition, camera angle, lighting, shadows and background. Do not "
-    "beautify, restyle or regenerate anything. EDGE CASES: if the image has "
-    "no overlaid watermark or added text at all, return it unchanged. If the "
-    "image is a marketing poster / promotional composite (a product photo "
-    "surrounded by designed headlines, slogans, price tags, decorative "
-    "graphics or layout elements), extract only the original product photo: "
-    "remove all the added poster text and decorative design elements and "
-    "output a clean photo of the product alone, reconstructing the covered "
-    "areas naturally. Output only the cleaned photo."
+    "the product or its packaging must be preserved exactly as-is. Preserve "
+    "every pixel inside the product and packaging silhouettes as a protected "
+    "region: never erase, inpaint, redraw, simplify, move or reinterpret any "
+    "mark inside those silhouettes, even when it resembles a watermark, logo "
+    "or promotional text. If it is uncertain whether an element is physically "
+    "printed on the product or packaging, preserve it. Preserve "
+    "the source's visually correct orientation and handedness exactly: never "
+    "rotate, turn upside down, flip, mirror, invert or transpose the product "
+    "or scene. Keep the same composition, camera angle, crop, lighting, "
+    "shadows and background. Do not beautify, restyle or regenerate anything. "
+    "If the image has no non-product text or overlays, return it unchanged. "
+    "For a marketing poster or promotional composite, remove the entire "
+    "surrounding design and output only the clean original product photo, "
+    "reconstructing covered areas naturally. Output only the cleaned photo."
 )
 
 UPSCALE_PROMPT = (
@@ -469,10 +481,24 @@ UPSCALE_PROMPT = (
     "the most plausible sharp version of the same scene — every object must "
     "end up in sharp focus. STRICT REQUIREMENTS: the content must remain "
     "100% identical — same subjects, same text and wording, same layout, "
-    "composition, colors, lighting and background. Do not add, remove, "
-    "restyle or reinterpret anything; only maximise sharpness, resolution "
-    "and clarity. Output only the ultra-high-definition photo."
+    "composition, colors, lighting and background. Preserve the source's "
+    "visually correct orientation and handedness exactly: never rotate, turn "
+    "upside down, flip, mirror, invert or transpose anything. Do not add, "
+    "remove, restyle or reinterpret anything; only maximise sharpness, "
+    "resolution and clarity. Output only the ultra-high-definition photo."
 )
+
+
+def _with_custom_restore_prompt(base_prompt: str, custom_prompt: str) -> str:
+    custom = custom_prompt.strip()
+    if not custom:
+        return base_prompt
+    return (
+        f"{base_prompt} ADDITIONAL USER REQUIREMENTS: {custom} "
+        "Apply these additional requirements only when they do not conflict "
+        "with the strict preservation, orientation and product-identity rules "
+        "above; those rules always take precedence."
+    )
 
 
 # gpt-image-2 size constraints: sides are multiples of 16 and <= 3840,
@@ -502,7 +528,8 @@ def _source_size(image: str, area: Optional[float] = None) -> str:
             return "auto"
         raw = base64.b64decode(image.split(",", 1)[1])
         with Image.open(io.BytesIO(raw)) as im:
-            return _fit_size(im.width, im.height, area)
+            oriented = ImageOps.exif_transpose(im)
+            return _fit_size(oriented.width, oriented.height, area)
     except Exception:  # noqa: BLE001 - fall back to upstream default
         return "auto"
 
@@ -513,7 +540,8 @@ def _source_area(image: str) -> Optional[float]:
             return None
         raw = base64.b64decode(image.split(",", 1)[1])
         with Image.open(io.BytesIO(raw)) as im:
-            return float(im.width * im.height)
+            oriented = ImageOps.exif_transpose(im)
+            return float(oriented.width * oriented.height)
     except Exception:  # noqa: BLE001 - fall back to shape-derived area
         return None
 
@@ -530,7 +558,7 @@ def _requested_size(aspect: str, area: Optional[float]) -> str:
     return _fit_size(w, h, area)
 
 
-async def _submit_restore(
+async def _submit_restore_once(
     prompt: str,
     image: str,
     mode: str,
@@ -553,6 +581,31 @@ async def _submit_restore(
     )
 
 
+async def _submit_restore(
+    prompt: str,
+    image: str,
+    mode: str,
+    area: Optional[float] = None,
+    aspect_ratio: str = "",
+) -> str:
+    last_exc: Optional[Exception] = None
+    for attempt in range(_MAX_RESTORE_SUBMIT_ATTEMPTS):
+        try:
+            async with _restore_submit_sem:
+                return await _submit_restore_once(
+                    prompt,
+                    image,
+                    mode,
+                    area,
+                    aspect_ratio,
+                )
+        except Exception as exc:  # noqa: BLE001 - retry transient upstream failures
+            last_exc = exc
+            if attempt < _MAX_RESTORE_SUBMIT_ATTEMPTS - 1:
+                await asyncio.sleep(1.5 * (attempt + 1))
+    raise last_exc if last_exc else grsai.GrsaiError("restore submit failed")
+
+
 @app.post("/api/watermark")
 async def watermark(
     req: WatermarkRequest, _uid: int = Depends(auth.require_user)
@@ -562,7 +615,7 @@ async def watermark(
         raise HTTPException(status_code=400, detail="image_base64 is required")
     try:
         task_id = await _submit_restore(
-            WATERMARK_PROMPT,
+            _with_custom_restore_prompt(WATERMARK_PROMPT, req.prompt),
             req.image_base64,
             req.mode,
             aspect_ratio=req.aspectRatio,
@@ -583,7 +636,7 @@ async def upscale(
     try:
         # Upscale always targets the maximum allowed pixel area (~4K).
         task_id = await _submit_restore(
-            UPSCALE_PROMPT,
+            _with_custom_restore_prompt(UPSCALE_PROMPT, req.prompt),
             req.image_base64,
             req.mode,
             area=8_294_400,

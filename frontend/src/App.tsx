@@ -699,10 +699,11 @@ function App() {
           </div>
           <pre className="api-example">{`# 提交去水印（超清把 watermark 换成 upscale）
 # aspectRatio 可省略或留空表示原图比例，也可填 1:1 / 4:3 / 3:4 / 3:2 / 2:3 / 16:9 / 9:16 / 1024x1536
+# prompt 可选，用于补充自定义处理要求（最多 2000 字）
 curl -X POST https://ecom-image-api.onrender.com/api/watermark \\
   -H "Authorization: Bearer ${user.api_key}" \\
   -H "Content-Type: application/json" \\
-  -d '{"image_base64": "data:image/png;base64,....", "aspectRatio": "3:4"}'
+  -d '{"image_base64": "data:image/png;base64,....", "aspectRatio": "3:4", "prompt": "清除背景中的全部文字并保持商品原始方向"}'
 # 返回 {"task_id": "..."}，然后轮询结果：
 curl -X POST https://ecom-image-api.onrender.com/api/result \\
   -H "Authorization: Bearer ${user.api_key}" \\

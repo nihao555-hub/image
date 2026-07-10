@@ -1415,6 +1415,37 @@ textarea:focus-visible {
 .wm-aspect select {
   min-width: 104px;
 }
+.wm-prompt {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.wm-prompt textarea {
+  width: 100%;
+  min-height: 58px;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 9px 11px;
+  color: var(--text);
+  background: var(--surface);
+  line-height: 1.45;
+}
+.wm-prompt textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.wm-prompt textarea:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.wm-prompt small {
+  color: var(--muted);
+}
 .wm-dropzone {
   flex: 1;
   min-height: 420px;
@@ -1702,6 +1733,12 @@ textarea:focus-visible {
 }
 
 @media (max-width: 920px) {
+  .wm-prompt {
+    grid-template-columns: 1fr;
+  }
+  .wm-prompt small {
+    justify-self: end;
+  }
   .topbar {
     gap: 12px;
   }

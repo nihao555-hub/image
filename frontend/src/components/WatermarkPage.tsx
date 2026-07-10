@@ -7,17 +7,19 @@ export type RestoreFeature = 'watermark' | 'upscale'
 
 const FEATURE_TEXT: Record<
   RestoreFeature,
-  { action: string; dropTitle: string; dropHint: string }
+  { action: string; dropTitle: string; dropHint: string; promptPlaceholder: string }
 > = {
   watermark: {
     action: '开始去水印',
     dropTitle: '点击或拖入图片，批量去除水印',
     dropHint: '仅去除覆盖在图上的水印 / logo / 网址等，商品本身（含商品自带文字图案）完全不变',
+    promptPlaceholder: '例如：清除背景和边框中的全部文字，只保留商品包装上原有文字',
   },
   upscale: {
     action: '开始超清处理',
     dropTitle: '点击或拖入图片，批量变超清',
     dropHint: '模糊变高清：锐化细节、去噪，图中文字 / 参数变清晰，内容不会被改变',
+    promptPlaceholder: '例如：重点增强商品表面纹理，保持原始颜色和构图',
   },
 }
 
@@ -56,6 +58,7 @@ interface WmTask {
   running: boolean
   mode: RestoreMode
   aspectRatio: string
+  prompt: string
   images: WmImage[]
   startedAt?: number
   finishedAt?: number
@@ -123,6 +126,7 @@ function loadTasks(feature: RestoreFeature): WmTask[] | null {
     return parsed.map((t) => ({
       ...t,
       aspectRatio: typeof t.aspectRatio === 'string' ? t.aspectRatio : '',
+      prompt: typeof t.prompt === 'string' ? t.prompt : '',
       images: (t.images ?? []).map((x) => ({
         ...x,
         // A submit interrupted by a reload cannot be resumed without its source.
@@ -183,6 +187,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
           running: false,
           mode: 'pro',
           aspectRatio: '',
+          prompt: '',
           images: [],
         },
       ],
@@ -220,6 +225,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       running: false,
       mode: 'pro',
       aspectRatio: '',
+      prompt: '',
       images: [],
     }
     setTasks((prev) => [t, ...prev])
@@ -268,9 +274,14 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
 
   // Submit one image; each submit consumes one attempt.
   const submitOne = useCallback(
-    async (img: WmImage, mode: RestoreMode, aspectRatio: string): Promise<WmImage> => {
+    async (
+      img: WmImage,
+      mode: RestoreMode,
+      aspectRatio: string,
+      prompt: string,
+    ): Promise<WmImage> => {
       try {
-        const taskId = await submitRestore(feature, img.dataUrl, mode, aspectRatio)
+        const taskId = await submitRestore(feature, img.dataUrl, mode, aspectRatio, prompt)
         return { ...img, taskId, status: 'processing', attempts: img.attempts + 1, error: '' }
       } catch (e) {
         const next: WmImage = { ...img, attempts: img.attempts + 1, error: String(e) }
@@ -291,12 +302,18 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
   )
 
   const submitQueued = useCallback(
-    async (taskId: string, images: WmImage[], mode: RestoreMode, aspectRatio: string) => {
+    async (
+      taskId: string,
+      images: WmImage[],
+      mode: RestoreMode,
+      aspectRatio: string,
+      prompt: string,
+    ) => {
       await runConcurrent(images, RESTORE_SUBMIT_CONCURRENCY, async (img) => {
         if (submittingRef.current.has(img.id)) return
         submittingRef.current.add(img.id)
         try {
-          applyImagePatches(taskId, [await submitOne(img, mode, aspectRatio)])
+          applyImagePatches(taskId, [await submitOne(img, mode, aspectRatio, prompt)])
         } finally {
           submittingRef.current.delete(img.id)
         }
@@ -329,6 +346,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
           needResubmit,
           task.mode,
           task.aspectRatio,
+          task.prompt,
         )
       }
     }
@@ -371,6 +389,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
           retries,
           task.mode,
           task.aspectRatio,
+          task.prompt,
         )
       }
     }
@@ -416,6 +435,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
         ),
         task.mode,
         task.aspectRatio,
+        task.prompt,
       )
     },
     [ensurePolling, patchTask, submitQueued],
@@ -464,6 +484,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
         ],
         task.mode,
         task.aspectRatio,
+        task.prompt,
       )
     },
     [ensurePolling, patchTask, submitQueued],
@@ -658,6 +679,19 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             </button>
           </div>
         </div>
+
+        <label className="wm-prompt">
+          <span>自定义需求（可选）</span>
+          <textarea
+            value={active.prompt}
+            maxLength={2000}
+            rows={2}
+            disabled={active.running}
+            placeholder={text.promptPlaceholder}
+            onChange={(e) => patchTask(active.id, (t) => ({ ...t, prompt: e.target.value }))}
+          />
+          <small>{active.prompt.length}/2000</small>
+        </label>
 
         {active.running && (
           <div className="wm-progress-row">

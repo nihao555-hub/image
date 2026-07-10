@@ -179,10 +179,12 @@ export async function submitRestore(
   feature: 'watermark' | 'upscale',
   imageBase64: string,
   mode: RestoreMode,
+  aspect = '',
 ): Promise<string> {
   const data = await post<{ task_id: string }>(`/api/${feature}`, {
     image_base64: imageBase64,
     mode,
+    aspectRatio: aspect,
   })
   return data.task_id
 }

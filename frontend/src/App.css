@@ -1394,6 +1394,18 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+.wm-aspect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.wm-aspect select {
+  min-width: 104px;
 }
 .wm-dropzone {
   flex: 1;

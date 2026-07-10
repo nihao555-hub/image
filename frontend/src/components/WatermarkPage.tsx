@@ -22,6 +22,16 @@ const FEATURE_TEXT: Record<
 
 const MAX_FILES = 1000
 const MAX_ATTEMPTS = 5
+const ASPECT_OPTIONS = [
+  { value: '', label: '原图比例' },
+  { value: '1:1', label: '1:1' },
+  { value: '4:3', label: '4:3' },
+  { value: '3:4', label: '3:4' },
+  { value: '3:2', label: '3:2' },
+  { value: '2:3', label: '2:3' },
+  { value: '16:9', label: '16:9' },
+  { value: '9:16', label: '9:16' },
+] as const
 
 type WmStatus = 'ready' | 'processing' | 'done' | 'failed'
 
@@ -43,6 +53,7 @@ interface WmTask {
   createdAt: number
   running: boolean
   mode: RestoreMode
+  aspectRatio: string
   images: WmImage[]
   startedAt?: number
   finishedAt?: number
@@ -85,6 +96,7 @@ function loadTasks(feature: RestoreFeature): WmTask[] | null {
     if (!Array.isArray(parsed) || !parsed.length) return null
     return parsed.map((t) => ({
       ...t,
+      aspectRatio: typeof t.aspectRatio === 'string' ? t.aspectRatio : '',
       images: (t.images ?? []).map((x) => ({
         ...x,
         // A submit interrupted by a reload cannot be resumed without its source.
@@ -138,7 +150,15 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
   const [tasks, setTasks] = useState<WmTask[]>(
     () =>
       loadTasks(feature) ?? [
-        { id: uid(), name: '任务 1', createdAt: Date.now(), running: false, mode: 'pro', images: [] },
+        {
+          id: uid(),
+          name: '任务 1',
+          createdAt: Date.now(),
+          running: false,
+          mode: 'pro',
+          aspectRatio: '',
+          images: [],
+        },
       ],
   )
   const [activeId, setActiveId] = useState(() => '')
@@ -172,6 +192,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       createdAt: Date.now(),
       running: false,
       mode: 'pro',
+      aspectRatio: '',
       images: [],
     }
     setTasks((prev) => [t, ...prev])
@@ -219,17 +240,20 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
   )
 
   // Submit one image; each submit consumes one attempt.
-  const submitOne = useCallback(async (img: WmImage, mode: RestoreMode): Promise<WmImage> => {
-    try {
-      const taskId = await submitRestore(feature, img.dataUrl, mode)
-      return { ...img, taskId, status: 'processing', attempts: img.attempts + 1, error: '' }
-    } catch (e) {
-      const next: WmImage = { ...img, attempts: img.attempts + 1, error: String(e) }
-      return next.attempts >= MAX_ATTEMPTS
-        ? { ...next, status: 'failed' }
-        : { ...next, status: 'processing', taskId: '' }
-    }
-  }, [feature])
+  const submitOne = useCallback(
+    async (img: WmImage, mode: RestoreMode, aspectRatio: string): Promise<WmImage> => {
+      try {
+        const taskId = await submitRestore(feature, img.dataUrl, mode, aspectRatio)
+        return { ...img, taskId, status: 'processing', attempts: img.attempts + 1, error: '' }
+      } catch (e) {
+        const next: WmImage = { ...img, attempts: img.attempts + 1, error: String(e) }
+        return next.attempts >= MAX_ATTEMPTS
+          ? { ...next, status: 'failed' }
+          : { ...next, status: 'processing', taskId: '' }
+      }
+    },
+    [feature],
+  )
 
   const applyImagePatches = useCallback(
     (taskId: string, patched: WmImage[]) => {
@@ -258,7 +282,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       if (needResubmit.length) {
         applyImagePatches(
           task.id,
-          await Promise.all(needResubmit.map((x) => submitOne(x, task.mode))),
+          await Promise.all(needResubmit.map((x) => submitOne(x, task.mode, task.aspectRatio))),
         )
       }
     }
@@ -301,7 +325,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       if (retries.length) {
         applyImagePatches(
           task.id,
-          await Promise.all(retries.map((x) => submitOne(x, task.mode))),
+          await Promise.all(retries.map((x) => submitOne(x, task.mode, task.aspectRatio))),
         )
       }
     }
@@ -333,7 +357,13 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       }))
       // Fire every submission at once — the whole batch is processed in parallel.
       const submitted = await Promise.all(
-        targets.map((x) => submitOne({ ...x, status: 'processing', attempts: 0, taskId: '' }, task.mode)),
+        targets.map((x) =>
+          submitOne(
+            { ...x, status: 'processing', attempts: 0, taskId: '' },
+            task.mode,
+            task.aspectRatio,
+          ),
+        ),
       )
       applyImagePatches(taskId, submitted)
       ensurePolling()
@@ -371,6 +401,7 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
       const submitted = await submitOne(
         { ...img, status: 'processing', attempts: 0, taskId: '' },
         task.mode,
+        task.aspectRatio,
       )
       applyImagePatches(taskId, [submitted])
       ensurePolling()
@@ -525,6 +556,22 @@ export function WatermarkPage({ feature }: { feature: RestoreFeature }) {
             )}
           </div>
           <div className="wm-actions">
+            <label className="wm-aspect">
+              <span>出图比例</span>
+              <select
+                value={active.aspectRatio}
+                disabled={active.running}
+                onChange={(e) =>
+                  patchTask(active.id, (t) => ({ ...t, aspectRatio: e.target.value }))
+                }
+              >
+                {ASPECT_OPTIONS.map((option) => (
+                  <option value={option.value} key={option.value || 'source'}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button className="secondary" onClick={() => inputRef.current?.click()} disabled={active.running}>
               添加图片
             </button>

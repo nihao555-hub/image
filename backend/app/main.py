@@ -432,6 +432,7 @@ class WatermarkRequest(BaseModel):
     image_base64: str
     # "pro" (gpt-image-2) or "fast" (nano-banana-2-lite).
     mode: str = "pro"
+    aspectRatio: str = ""
 
 
 WATERMARK_PROMPT = (
@@ -504,16 +505,47 @@ def _source_size(image: str, area: Optional[float] = None) -> str:
         return "auto"
 
 
+def _source_area(image: str) -> Optional[float]:
+    try:
+        if not image.startswith("data:"):
+            return None
+        raw = base64.b64decode(image.split(",", 1)[1])
+        with Image.open(io.BytesIO(raw)) as im:
+            return float(im.width * im.height)
+    except Exception:  # noqa: BLE001 - fall back to shape-derived area
+        return None
+
+
+def _requested_size(aspect: str, area: Optional[float]) -> str:
+    token = (aspect or "").strip()
+    match = re.match(r"^\s*(\d+)\s*[:x×]\s*(\d+)\s*$", token)
+    if not match:
+        return ""
+    w = int(match.group(1))
+    h = int(match.group(2))
+    if w <= 0 or h <= 0:
+        return ""
+    return _fit_size(w, h, area)
+
+
 async def _submit_restore(
-    prompt: str, image: str, mode: str, area: Optional[float] = None
+    prompt: str,
+    image: str,
+    mode: str,
+    area: Optional[float] = None,
+    aspect_ratio: str = "",
 ) -> str:
     if mode == "fast":
         return await grsai.submit_nano_banana(
             prompt=prompt, urls=[image], model=config.FAST_IMAGE_MODEL
         )
+    requested_size = _requested_size(
+        aspect_ratio,
+        area if area is not None else _source_area(image),
+    )
     return await grsai.submit_draw(
         prompt=prompt,
-        aspect_ratio=_source_size(image, area),
+        aspect_ratio=requested_size or _source_size(image, area),
         quality="auto",
         urls=[image],
     )
@@ -527,7 +559,12 @@ async def watermark(
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
     try:
-        task_id = await _submit_restore(WATERMARK_PROMPT, req.image_base64, req.mode)
+        task_id = await _submit_restore(
+            WATERMARK_PROMPT,
+            req.image_base64,
+            req.mode,
+            aspect_ratio=req.aspectRatio,
+        )
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
     return {"task_id": task_id}
@@ -543,7 +580,11 @@ async def upscale(
     try:
         # Upscale always targets the maximum allowed pixel area (~4K).
         task_id = await _submit_restore(
-            UPSCALE_PROMPT, req.image_base64, req.mode, area=8_294_400
+            UPSCALE_PROMPT,
+            req.image_base64,
+            req.mode,
+            area=8_294_400,
+            aspect_ratio=req.aspectRatio,
         )
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")

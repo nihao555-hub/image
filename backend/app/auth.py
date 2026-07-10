@@ -48,6 +48,12 @@ def _db() -> sqlite3.Connection:
         "api_key TEXT UNIQUE NOT NULL,"
         "created_at INTEGER NOT NULL)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS usage ("
+        "user_id INTEGER PRIMARY KEY,"
+        "watermark INTEGER NOT NULL DEFAULT 0,"
+        "upscale INTEGER NOT NULL DEFAULT 0)"
+    )
     return conn
 
 
@@ -126,3 +132,35 @@ async def require_user(authorization: str = Header(default="")) -> int:
     if uid is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
     return uid
+
+
+def record_usage(uid: int, feature: str) -> None:
+    if feature not in {"watermark", "upscale"}:
+        raise ValueError(f"Unsupported usage feature: {feature}")
+    conn = _db()
+    try:
+        values = (uid, 1, 0) if feature == "watermark" else (uid, 0, 1)
+        conn.execute(
+            "INSERT INTO usage (user_id, watermark, upscale) VALUES (?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "watermark = usage.watermark + excluded.watermark, "
+            "upscale = usage.upscale + excluded.upscale",
+            values,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_usage(uid: int) -> Dict[str, int]:
+    conn = _db()
+    try:
+        row = conn.execute(
+            "SELECT watermark, upscale FROM usage WHERE user_id=?", (uid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return {
+        "watermark": int(row[0]) if row else 0,
+        "upscale": int(row[1]) if row else 0,
+    }

@@ -1239,6 +1239,14 @@ textarea:focus-visible {
   margin-bottom: 10px;
   word-break: break-all;
 }
+.api-usage {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: 13px;
+}
 
 /* ---------------------------- Watermark page --------------------------- */
 .wm-layout {

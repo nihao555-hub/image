@@ -567,6 +567,7 @@ async def watermark(
         )
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
+    auth.record_usage(_uid, "watermark")
     return {"task_id": task_id}
 
 
@@ -588,7 +589,14 @@ async def upscale(
         )
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")
+    auth.record_usage(_uid, "upscale")
     return {"task_id": task_id}
+
+
+@app.get("/api/usage")
+async def usage(_uid: int = Depends(auth.require_user)) -> Dict[str, int]:
+    counts = auth.get_usage(_uid)
+    return {**counts, "total": counts["watermark"] + counts["upscale"]}
 
 
 @app.post("/api/result")

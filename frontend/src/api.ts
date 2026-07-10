@@ -79,6 +79,12 @@ export interface AuthUser {
   api_key: string
 }
 
+export interface Usage {
+  watermark: number
+  upscale: number
+  total: number
+}
+
 const AUTH_KEY = 'tj-auth'
 
 export function getAuth(): AuthUser | null {
@@ -192,4 +198,19 @@ export async function submitRestore(
 export async function fetchResults(ids: string[]): Promise<Record<string, TaskResult>> {
   const data = await post<{ results: Record<string, TaskResult> }>('/api/result', { ids })
   return data.results
+}
+
+export async function fetchUsage(): Promise<Usage> {
+  const user = getAuth()
+  const headers: Record<string, string> = {}
+  if (user) headers.Authorization = `Bearer ${user.token}`
+  const resp = await fetch('/api/usage', { headers })
+  if (!resp.ok) {
+    if (resp.status === 401 && user) {
+      setAuth(null)
+      window.dispatchEvent(new Event('tj-unauth'))
+    }
+    throw new Error(`${resp.status}: ${await resp.text()}`)
+  }
+  return resp.json() as Promise<Usage>
 }

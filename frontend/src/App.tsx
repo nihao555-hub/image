@@ -4,6 +4,7 @@ import {
   fetchPlatforms,
   fetchResults,
   fetchTemplates,
+  fetchUsage,
   generateImages,
   generatePrompts,
   type Category,
@@ -12,6 +13,7 @@ import {
   type ProductInfo,
   type TaskResult,
   type Template,
+  type Usage,
   getAuth,
   setAuth,
   type AuthUser,
@@ -29,6 +31,9 @@ import { newItem, type BatchItem, type TrackedTask } from './types'
 function App() {
   const [user, setUser] = useState<AuthUser | null>(() => getAuth())
   const [showApi, setShowApi] = useState(false)
+  const [usage, setUsage] = useState<Usage | null>(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [usageError, setUsageError] = useState('')
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [mode, setMode] = useState<'watermark' | 'upscale' | 'generate'>('watermark')
   const [templates, setTemplates] = useState<Template[]>([])
@@ -55,6 +60,16 @@ function App() {
     window.addEventListener('tj-unauth', onUnauth)
     return () => window.removeEventListener('tj-unauth', onUnauth)
   }, [])
+
+  useEffect(() => {
+    if (!showApi || !user) return
+    setUsageLoading(true)
+    setUsageError('')
+    fetchUsage()
+      .then(setUsage)
+      .catch((e) => setUsageError(String(e)))
+      .finally(() => setUsageLoading(false))
+  }, [showApi, user])
 
   useEffect(() => {
     fetchTemplates()
@@ -675,11 +690,19 @@ function App() {
             <code>Authorization: Bearer 你的Key</code>）：
           </p>
           <pre className="api-key">{user.api_key}</pre>
+          <div className="api-usage">
+            {usageLoading
+              ? '使用统计加载中…'
+              : usageError
+                ? '使用统计暂不可用'
+                : `已使用：去水印 ${usage?.watermark ?? 0} 次 · 超清 ${usage?.upscale ?? 0} 次（合计 ${usage?.total ?? 0} 次）`}
+          </div>
           <pre className="api-example">{`# 提交去水印（超清把 watermark 换成 upscale）
+# aspectRatio 可省略或留空表示原图比例，也可填 1:1 / 4:3 / 3:4 / 3:2 / 2:3 / 16:9 / 9:16 / 1024x1536
 curl -X POST https://ecom-image-api.onrender.com/api/watermark \\
   -H "Authorization: Bearer ${user.api_key}" \\
   -H "Content-Type: application/json" \\
-  -d '{"image_base64": "data:image/png;base64,...."}'
+  -d '{"image_base64": "data:image/png;base64,....", "aspectRatio": "3:4"}'
 # 返回 {"task_id": "..."}，然后轮询结果：
 curl -X POST https://ecom-image-api.onrender.com/api/result \\
   -H "Authorization: Bearer ${user.api_key}" \\

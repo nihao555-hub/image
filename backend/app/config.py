@@ -20,5 +20,5 @@ GEEKAI_IMAGE_QUALITY = os.environ.get("GEEKAI_IMAGE_QUALITY", "low")
 # Networking
 REQUEST_TIMEOUT = float(os.environ.get("GRSAI_REQUEST_TIMEOUT", "60"))
 RESTORE_SUBMIT_CONCURRENCY = max(
-    1, int(os.environ.get("RESTORE_SUBMIT_CONCURRENCY", "12"))
+    1, int(os.environ.get("RESTORE_SUBMIT_CONCURRENCY", "1000"))
 )

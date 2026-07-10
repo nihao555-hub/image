@@ -22,7 +22,7 @@ const FEATURE_TEXT: Record<
 }
 
 const MAX_FILES = 1000
-const RESTORE_SUBMIT_CONCURRENCY = 12
+const RESTORE_SUBMIT_CONCURRENCY = 1000
 const RESULT_POLL_BATCH_SIZE = 80
 const ASPECT_OPTIONS = [
   { value: '', label: '原图比例' },

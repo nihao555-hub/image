@@ -5,7 +5,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://ecom-image-api.onrender.com/api/:path*"
+      "destination": "http://81.69.255.11/ecom-image-api/api/:path*"
     }
   ]
 }

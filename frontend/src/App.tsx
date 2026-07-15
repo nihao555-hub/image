@@ -699,12 +699,12 @@ function App() {
           </div>
           <pre className="api-example">{`# 提交去水印（超清把 watermark 换成 upscale）
 # aspectRatio 可省略或留空表示原图比例，也可填 1:1 / 4:3 / 3:4 / 3:2 / 2:3 / 16:9 / 9:16 / 1024x1536
-curl -X POST https://ecom-image-api.onrender.com/api/watermark \\
+curl -X POST http://81.69.255.11/ecom-image-api/api/watermark \\
   -H "Authorization: Bearer ${user.api_key}" \\
   -H "Content-Type: application/json" \\
   -d '{"image_base64": "data:image/png;base64,....", "aspectRatio": "3:4"}'
 # 返回 {"task_id": "..."}，然后轮询结果：
-curl -X POST https://ecom-image-api.onrender.com/api/result \\
+curl -X POST http://81.69.255.11/ecom-image-api/api/result \\
   -H "Authorization: Bearer ${user.api_key}" \\
   -H "Content-Type: application/json" \\
   -d '{"ids": ["task_id"]}'`}</pre>

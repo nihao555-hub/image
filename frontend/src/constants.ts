@@ -1,6 +1,6 @@
 export const HISTORY_KEY = 'ecom_image_history'
 export const HISTORY_MAX = 40
-export const MAX_ATTEMPTS = 3
+export const MAX_ATTEMPTS = 5
 
 export const DENSITIES: { id: string; name: string }[] = [
   { id: 'clean', name: '简洁少字' },

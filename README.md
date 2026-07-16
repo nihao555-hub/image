@@ -87,7 +87,7 @@ Authorization: Bearer sk-tj-...
 | `label` | 否 | `API 套图` | 返回任务的商品标签 |
 
 ```bash
-curl -X POST http://81.69.255.11/ecom-image-api/api/image-sets/generate \
+curl -X POST https://shuoma.site/ecom-image-api/api/image-sets/generate \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -F 'prompt=一款轻量防水通勤双肩包，突出大容量和电脑保护层' \
   -F 'image=@./product.png' \
@@ -101,7 +101,7 @@ curl -X POST http://81.69.255.11/ecom-image-api/api/image-sets/generate \
 响应会返回每张图的 `task_id`、最终使用的提示词和套图类型。使用任务 ID 轮询：
 
 ```bash
-curl -X POST http://81.69.255.11/ecom-image-api/api/image-sets/result \
+curl -X POST https://shuoma.site/ecom-image-api/api/image-sets/result \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{"ids":["task-id-1","task-id-2"]}'

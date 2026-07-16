@@ -19,3 +19,6 @@ GEEKAI_IMAGE_QUALITY = os.environ.get("GEEKAI_IMAGE_QUALITY", "low")
 
 # Networking
 REQUEST_TIMEOUT = float(os.environ.get("GRSAI_REQUEST_TIMEOUT", "60"))
+
+# Uploaded reference images
+MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))

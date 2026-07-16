@@ -9,7 +9,7 @@ from math import gcd
 from typing import Any, Dict, List, Optional
 
 from PIL import Image
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +66,7 @@ class GeneratePromptsRequest(BaseModel):
     platform: str = ""
     language: str = ""
     density: str = ""
+    aspect_ratio: str = ""
     # Optional reference product image (data URL or http URL). When provided the
     # LLM is asked to visually inspect it before writing the prompts.
     image_base64: Optional[str] = None
@@ -97,6 +98,12 @@ class TaskInfo(BaseModel):
 
 class GenerateResponse(BaseModel):
     tasks: List[TaskInfo]
+
+
+class GenerateImageSetResponse(BaseModel):
+    tasks: List[TaskInfo]
+    prompts: Dict[str, str]
+    template_ids: List[str]
 
 
 class ResultRequest(BaseModel):
@@ -202,6 +209,88 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _parse_template_ids(value: str) -> List[str]:
+    if not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = [item.strip() for item in value.split(",")]
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise HTTPException(
+            status_code=422,
+            detail="template_ids must be a JSON string array or comma-separated string",
+        )
+    template_ids = list(dict.fromkeys(item.strip() for item in parsed if item.strip()))
+    invalid = [template_id for template_id in template_ids if template_id not in TEMPLATE_BY_ID]
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown template_ids: {', '.join(invalid)}",
+        )
+    return template_ids
+
+
+async def _image_data_url(image: Optional[UploadFile]) -> Optional[str]:
+    if image is None:
+        return None
+    try:
+        data = await image.read(config.MAX_UPLOAD_BYTES + 1)
+    finally:
+        await image.close()
+    if not data:
+        raise HTTPException(status_code=422, detail="Uploaded image is empty")
+    if len(data) > config.MAX_UPLOAD_BYTES:
+        max_mb = config.MAX_UPLOAD_BYTES / 1024 / 1024
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded image exceeds the {max_mb:g} MB limit",
+        )
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image_format = source.format
+            source.verify()
+    except Exception as exc:
+        raise HTTPException(status_code=415, detail="Uploaded file is not a valid image") from exc
+    media_types = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+    }
+    media_type = media_types.get(image_format or "")
+    if media_type is None:
+        raise HTTPException(
+            status_code=415,
+            detail="Only JPEG, PNG, and WebP reference images are supported",
+        )
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
+
+
+def _direct_set_prompt(
+    prompt: str,
+    template_id: str,
+    language: str,
+    density: str,
+) -> str:
+    template = TEMPLATE_BY_ID[template_id]
+    text_level = template.get("textLevel", "none")
+    if text_level == "none":
+        text_rule = " Keep the image completely free of text and logos."
+    else:
+        amount = _text_amount(text_level, density)
+        language_name = LANGUAGE_NAMES.get(language, "English")
+        text_rule = (
+            f" Render {amount} well-composed marketing labels on the image in "
+            f"{language_name}."
+        )
+    return (
+        f"{prompt.strip()}\n\n"
+        f"Image type: {template['name']} ({template['en']}). "
+        f"{template['guidance']}{text_rule}"
+    )
+
+
 def _aspect_orientation(aspect: str) -> str:
     m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
     if not m:
@@ -291,8 +380,8 @@ async def generate_prompts(
         else ""
     )
     platform_aspect_note = ""
-    if platform:
-        aspect = str(platform.get("aspect") or "").strip()
+    if platform or req.aspect_ratio:
+        aspect = req.aspect_ratio or str(platform.get("aspect") or "").strip()
         orientation = _aspect_orientation(aspect)
         ratio = _aspect_ratio_label(aspect)
         if orientation == "portrait":
@@ -427,6 +516,98 @@ async def generate(
             raise HTTPException(status_code=502, detail=f"Generation submit failed: {r}")
         tasks.append(r)
     return GenerateResponse(tasks=tasks)
+
+
+@app.post("/api/image-sets/generate", response_model=GenerateImageSetResponse)
+async def generate_image_set(
+    prompt: str = Form(..., min_length=1, max_length=12000),
+    image: Optional[UploadFile] = File(default=None),
+    template_ids: str = Form(default=""),
+    platform: str = Form(default="custom"),
+    language: str = Form(default=""),
+    density: str = Form(default=""),
+    quality: str = Form(default="high"),
+    aspect_ratio: str = Form(default=""),
+    auto_prompts: bool = Form(default=True),
+    label: str = Form(default="API 套图"),
+    _uid: int = Depends(auth.require_user),
+) -> GenerateImageSetResponse:
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt cannot be blank")
+
+    platform_config = PLATFORM_BY_ID.get(platform)
+    if platform_config is None:
+        raise HTTPException(status_code=422, detail=f"Unknown platform: {platform}")
+
+    selected_ids = _parse_template_ids(template_ids)
+    if not selected_ids:
+        selected_ids = list(platform_config["templates"])
+
+    resolved_language = language or platform_config["language"]
+    if resolved_language not in LANGUAGE_NAMES:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported language: {resolved_language}"
+        )
+    resolved_density = density or platform_config["textDensity"]
+    if resolved_density not in DENSITY_INSTRUCTIONS:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported density: {resolved_density}"
+        )
+    if quality not in {"auto", "low", "medium", "high"}:
+        raise HTTPException(status_code=422, detail=f"Unsupported quality: {quality}")
+    if aspect_ratio and aspect_ratio not in {
+        "1024x1024",
+        "1024x1536",
+        "1536x1024",
+    }:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported aspect_ratio: {aspect_ratio}"
+        )
+
+    image_base64 = await _image_data_url(image)
+    product = ProductInfo(extra=prompt)
+    if auto_prompts:
+        prompt_response = await generate_prompts(
+            GeneratePromptsRequest(
+                product=product,
+                template_ids=selected_ids,
+                has_image=image_base64 is not None,
+                platform=platform,
+                language=resolved_language,
+                density=resolved_density,
+                aspect_ratio=aspect_ratio,
+                image_base64=image_base64,
+            ),
+            _uid,
+        )
+        prompts = prompt_response.prompts
+    else:
+        prompts = {
+            template_id: _direct_set_prompt(
+                prompt, template_id, resolved_language, resolved_density
+            )
+            for template_id in selected_ids
+        }
+
+    jobs = [
+        GenerateJob(
+            template_id=template_id,
+            prompt=prompts[template_id],
+            aspectRatio=aspect_ratio or TEMPLATE_BY_ID[template_id]["aspectRatio"],
+            platform="" if aspect_ratio else platform,
+            quality=quality,
+            image_base64=image_base64,
+            label=f"{label.strip() or 'API 套图'} · {TEMPLATE_BY_ID[template_id]['name']}",
+        )
+        for template_id in selected_ids
+    ]
+    generation = await generate(GenerateRequest(jobs=jobs), _uid)
+    return GenerateImageSetResponse(
+        tasks=generation.tasks,
+        prompts=prompts,
+        template_ids=selected_ids,
+    )
 
 
 class WatermarkRequest(BaseModel):
@@ -646,6 +827,7 @@ async def admin_usage(
 
 
 @app.post("/api/result")
+@app.post("/api/image-sets/result")
 async def result(
     req: ResultRequest, _uid: int = Depends(auth.require_user)
 ) -> Dict[str, Any]:

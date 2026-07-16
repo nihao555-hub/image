@@ -25,7 +25,10 @@ from .platforms import (
     resolve_aspect,
 )
 
-app = FastAPI(title="AI E-commerce Image Set Generator")
+app = FastAPI(
+    title="AI E-commerce Image Set Generator",
+    root_path=config.ROOT_PATH,
+)
 
 app.add_middleware(
     CORSMiddleware,

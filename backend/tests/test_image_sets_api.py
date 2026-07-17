@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from app import auth
+from app import main
 from app.main import app
 
 
@@ -18,9 +19,11 @@ class GenerateImageSetApiTest(unittest.TestCase):
     def setUp(self) -> None:
         app.dependency_overrides[auth.require_user] = lambda: 1
         self.client = TestClient(app)
+        main._retry_registry.clear()
 
     def tearDown(self) -> None:
         app.dependency_overrides.clear()
+        main._retry_registry.clear()
 
     def test_requires_authentication(self) -> None:
         app.dependency_overrides.clear()
@@ -100,6 +103,67 @@ class GenerateImageSetApiTest(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 415)
+
+    def _submit_one(self, submit) -> str:
+        with patch("app.main.grsai.submit_draw", submit):
+            response = self.client.post(
+                "/api/image-sets/generate",
+                data={
+                    "prompt": "A product",
+                    "platform": "custom",
+                    "template_ids": "white_background",
+                    "auto_prompts": "false",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        return response.json()["tasks"][0]["task_id"]
+
+    def test_result_auto_retries_failed_generation(self) -> None:
+        submit = AsyncMock(side_effect=["task-1", "task-2"])
+        task_id = self._submit_one(submit)
+        self.assertEqual(task_id, "task-1")
+
+        failed = {"data": {"status": "failed", "progress": 0, "results": [],
+                            "failure_reason": "google gemini timeout", "error": ""}}
+        with patch("app.main.grsai.submit_draw", submit), \
+                patch("app.main.grsai.get_result", AsyncMock(return_value=failed)):
+            res = self.client.post("/api/result", json={"ids": [task_id]}).json()
+        entry = res["results"][task_id]
+        self.assertEqual(entry["status"], "retrying")
+        self.assertEqual(entry["attempt"], 2)
+        # resubmitted under the same public id
+        self.assertEqual(main._retry_registry[task_id].current_id, "task-2")
+
+        succeeded = {"data": {"status": "succeeded", "progress": 100,
+                              "results": [{"url": "https://example.com/x.png"}],
+                              "failure_reason": "", "error": ""}}
+        with patch("app.main.grsai.get_result", AsyncMock(return_value=succeeded)):
+            res = self.client.post("/api/result", json={"ids": [task_id]}).json()
+        self.assertEqual(res["results"][task_id]["status"], "succeeded")
+        self.assertNotIn(task_id, main._retry_registry)
+
+    def test_result_gives_up_after_max_attempts(self) -> None:
+        submit = AsyncMock(side_effect=[f"task-{i}" for i in range(10)])
+        task_id = self._submit_one(submit)
+        failed = {"data": {"status": "failed", "progress": 0, "results": [],
+                            "failure_reason": "boom", "error": ""}}
+        statuses = []
+        with patch("app.main.grsai.submit_draw", submit), \
+                patch("app.main.grsai.get_result", AsyncMock(return_value=failed)):
+            for _ in range(6):
+                res = self.client.post("/api/result", json={"ids": [task_id]}).json()
+                statuses.append(res["results"][task_id]["status"])
+        # 4 retries (attempts 2..5) then a terminal failed once budget is exhausted
+        self.assertEqual(statuses.count("retrying"), 4)
+        self.assertEqual(statuses[-1], "failed")
+        self.assertNotIn(task_id, main._retry_registry)
+
+    def test_result_passes_through_unregistered_ids(self) -> None:
+        succeeded = {"data": {"status": "succeeded", "progress": 100,
+                              "results": [{"url": "https://example.com/y.png"}]}}
+        with patch("app.main.grsai.get_result", AsyncMock(return_value=succeeded)):
+            res = self.client.post("/api/result", json={"ids": ["external-id"]}).json()
+        self.assertEqual(res["results"]["external-id"]["status"], "succeeded")
 
 
 if __name__ == "__main__":

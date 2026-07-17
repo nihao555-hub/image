@@ -4,9 +4,10 @@ import io
 import json
 import os
 import re
+import time
 from html import escape
 from math import gcd
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from PIL import Image
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
@@ -37,6 +38,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --------------------------------------------------------------------------- #
+# Server-side auto-retry for transient generation failures
+# --------------------------------------------------------------------------- #
+# The public task id returned to the client stays stable; when polling detects a
+# failed/errored task and retries remain, the original job is resubmitted and the
+# new upstream id is tracked behind the same public id. Callers just keep polling.
+MAX_GENERATION_ATTEMPTS = 5
+_RETRY_TTL_SECONDS = 1800
+_RETRY_MAX_ENTRIES = 2000
+
+
+class _RetryEntry:
+    def __init__(self, current_id: str, resubmit: Callable[[], Awaitable[str]]):
+        self.current_id = current_id
+        self.attempts = 1
+        self.resubmit = resubmit
+        self.created = time.monotonic()
+
+
+_retry_registry: Dict[str, _RetryEntry] = {}
+
+
+def _evict_retries() -> None:
+    now = time.monotonic()
+    for key in [
+        k for k, v in _retry_registry.items() if now - v.created > _RETRY_TTL_SECONDS
+    ]:
+        _retry_registry.pop(key, None)
+    overflow = len(_retry_registry) - _RETRY_MAX_ENTRIES
+    if overflow > 0:
+        for key in sorted(
+            _retry_registry, key=lambda k: _retry_registry[k].created
+        )[:overflow]:
+            _retry_registry.pop(key, None)
+
+
+def _register_retry(public_id: str, resubmit: Callable[[], Awaitable[str]]) -> None:
+    _evict_retries()
+    _retry_registry[public_id] = _RetryEntry(public_id, resubmit)
 
 
 # --------------------------------------------------------------------------- #
@@ -487,27 +529,35 @@ async def generate(
     if not req.jobs:
         raise HTTPException(status_code=400, detail="No jobs provided")
 
-    async def _submit(job: GenerateJob) -> TaskInfo:
+    def _make_submitter(job: GenerateJob) -> Callable[[], Awaitable[str]]:
         urls = [job.image_base64] if job.image_base64 else None
         aspect_ratio = resolve_aspect(job.platform, job.aspectRatio)
-        # Retry the submission a few times to ride out transient upstream errors.
-        last_exc: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                task_id = await grsai.submit_draw(
-                    prompt=job.prompt,
-                    aspect_ratio=aspect_ratio,
-                    quality=job.quality,
-                    urls=urls,
-                )
-                return TaskInfo(
-                    task_id=task_id, template_id=job.template_id, label=job.label
-                )
-            except Exception as exc:  # noqa: BLE001 - retry any submit failure
-                last_exc = exc
-                if attempt < 2:
-                    await asyncio.sleep(1.5 * (attempt + 1))
-        raise last_exc if last_exc else grsai.GrsaiError("submit failed")
+
+        async def _do() -> str:
+            # Retry the submission a few times to ride out transient upstream errors.
+            last_exc: Optional[Exception] = None
+            for attempt in range(3):
+                try:
+                    return await grsai.submit_draw(
+                        prompt=job.prompt,
+                        aspect_ratio=aspect_ratio,
+                        quality=job.quality,
+                        urls=urls,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retry any submit failure
+                    last_exc = exc
+                    if attempt < 2:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+            raise last_exc if last_exc else grsai.GrsaiError("submit failed")
+
+        return _do
+
+    async def _submit(job: GenerateJob) -> TaskInfo:
+        do_submit = _make_submitter(job)
+        task_id = await do_submit()
+        # Register the job so a failed generation is auto-retried during polling.
+        _register_retry(task_id, do_submit)
+        return TaskInfo(task_id=task_id, template_id=job.template_id, label=job.label)
 
     # Submit all jobs concurrently so the batch is generated in parallel.
     results = await asyncio.gather(
@@ -744,15 +794,19 @@ async def watermark(
     """Submit a single watermark-removal task; the client polls /api/result."""
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
-    try:
-        task_id = await _submit_restore(
+    async def _do() -> str:
+        return await _submit_restore(
             WATERMARK_PROMPT,
             req.image_base64,
             req.mode,
             aspect_ratio=req.aspectRatio,
         )
+
+    try:
+        task_id = await _do()
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
+    _register_retry(task_id, _do)
     auth.record_usage(_uid, "watermark")
     return {"task_id": task_id}
 
@@ -764,17 +818,21 @@ async def upscale(
     """Submit a single HD-enhancement task; the client polls /api/result."""
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
-    try:
+    async def _do() -> str:
         # Upscale always targets the maximum allowed pixel area (~4K).
-        task_id = await _submit_restore(
+        return await _submit_restore(
             UPSCALE_PROMPT,
             req.image_base64,
             req.mode,
             area=8_294_400,
             aspect_ratio=req.aspectRatio,
         )
+
+    try:
+        task_id = await _do()
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")
+    _register_retry(task_id, _do)
     auth.record_usage(_uid, "upscale")
     return {"task_id": task_id}
 
@@ -834,23 +892,50 @@ async def admin_usage(
 async def result(
     req: ResultRequest, _uid: int = Depends(auth.require_user)
 ) -> Dict[str, Any]:
-    async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:
+    async def _fetch(poll_id: str) -> Dict[str, Any]:
         try:
-            if task_id.startswith("gk:"):
-                return task_id, await geekai.get_result(task_id[3:])
-            data = await grsai.get_result(task_id)
+            if poll_id.startswith("gk:"):
+                return await geekai.get_result(poll_id[3:])
+            data = await grsai.get_result(poll_id)
             d = data.get("data", {})
-            return task_id, {
+            return {
                 "status": d.get("status", "unknown"),
                 "progress": d.get("progress", 0),
                 "results": d.get("results") or [],
                 "failure_reason": d.get("failure_reason", ""),
                 "error": d.get("error", ""),
             }
-        except Exception as exc:
-            return task_id, {"status": "error", "error": str(exc), "results": []}
+        except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
+            return {"status": "error", "error": str(exc), "results": []}
 
-    pairs = await asyncio.gather(*(_one(tid) for tid in req.ids))
+    async def _one(public_id: str) -> tuple[str, Dict[str, Any]]:
+        entry = _retry_registry.get(public_id)
+        res = await _fetch(entry.current_id if entry else public_id)
+        if entry is None:
+            return public_id, res
+        status = res.get("status")
+        if status in ("failed", "error") and entry.attempts < MAX_GENERATION_ATTEMPTS:
+            entry.attempts += 1
+            try:
+                entry.current_id = await entry.resubmit()
+            except Exception:  # noqa: BLE001 - resubmit itself failed; retry next poll
+                if entry.attempts >= MAX_GENERATION_ATTEMPTS:
+                    _retry_registry.pop(public_id, None)
+                    return public_id, res
+            return public_id, {
+                "status": "retrying",
+                "progress": 0,
+                "results": [],
+                "failure_reason": res.get("failure_reason", ""),
+                "error": res.get("error", ""),
+                "attempt": entry.attempts,
+            }
+        if status == "succeeded" or status in ("failed", "error"):
+            _retry_registry.pop(public_id, None)
+        return public_id, res
+
+    ids = list(dict.fromkeys(req.ids))
+    pairs = await asyncio.gather(*(_one(tid) for tid in ids))
     return {"results": dict(pairs)}
 
 

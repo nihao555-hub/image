@@ -695,7 +695,7 @@ function App() {
               ? '使用统计加载中…'
               : usageError
                 ? '使用统计暂不可用'
-                : `已使用：去水印 ${usage?.watermark ?? 0} 次 · 超清 ${usage?.upscale ?? 0} 次（合计 ${usage?.total ?? 0} 次）`}
+                : `已使用：去水印 ${usage?.watermark ?? 0} 次 · 超清 ${usage?.upscale ?? 0} 次 · 套图生成 ${usage?.image_set ?? 0} 张（合计 ${usage?.total ?? 0} 次）`}
           </div>
           <pre className="api-example">{`# 提交去水印（超清把 watermark 换成 upscale）
 # aspectRatio 可省略或留空表示原图比例，也可填 1:1 / 4:3 / 3:4 / 3:2 / 2:3 / 16:9 / 9:16 / 1024x1536

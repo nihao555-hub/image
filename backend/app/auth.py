@@ -88,9 +88,11 @@ def _db() -> _Db:
             "CREATE TABLE IF NOT EXISTS `usage` ("
             "user_id BIGINT PRIMARY KEY,"
             "watermark INT NOT NULL DEFAULT 0,"
-            "upscale INT NOT NULL DEFAULT 0)"
+            "upscale INT NOT NULL DEFAULT 0,"
+            "image_set INT NOT NULL DEFAULT 0)"
             " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
+        _ensure_image_set_column(db, "image_set INT NOT NULL DEFAULT 0")
     else:
         conn = sqlite3.connect(DB_PATH)
         db = _Db(conn, mysql=False)
@@ -107,9 +109,20 @@ def _db() -> _Db:
             "CREATE TABLE IF NOT EXISTS `usage` ("
             "user_id INTEGER PRIMARY KEY,"
             "watermark INTEGER NOT NULL DEFAULT 0,"
-            "upscale INTEGER NOT NULL DEFAULT 0)"
+            "upscale INTEGER NOT NULL DEFAULT 0,"
+            "image_set INTEGER NOT NULL DEFAULT 0)"
         )
+        _ensure_image_set_column(db, "image_set INTEGER NOT NULL DEFAULT 0")
     return db
+
+
+def _ensure_image_set_column(db: "_Db", column_def: str) -> None:
+    """Add the image_set column to a pre-existing usage table."""
+    try:
+        db.execute(f"ALTER TABLE `usage` ADD COLUMN {column_def}")
+        db.commit()
+    except (pymysql.err.OperationalError, pymysql.err.InternalError, sqlite3.OperationalError):
+        pass  # column already exists
 
 
 def _hash_pw(password: str, salt: str) -> str:
@@ -189,26 +202,30 @@ async def require_user(authorization: str = Header(default="")) -> int:
     return uid
 
 
-def record_usage(uid: int, feature: str) -> None:
-    if feature not in {"watermark", "upscale"}:
+def record_usage(uid: int, feature: str, count: int = 1) -> None:
+    if feature not in {"watermark", "upscale", "image_set"}:
         raise ValueError(f"Unsupported usage feature: {feature}")
     conn = _db()
     try:
-        values = (uid, 1, 0) if feature == "watermark" else (uid, 0, 1)
+        increments = {"watermark": 0, "upscale": 0, "image_set": 0}
+        increments[feature] = count
+        values = (uid, increments["watermark"], increments["upscale"], increments["image_set"])
         if conn.mysql:
             conn.execute(
-                "INSERT INTO `usage` (user_id, watermark, upscale) VALUES (?,?,?) "
+                "INSERT INTO `usage` (user_id, watermark, upscale, image_set) VALUES (?,?,?,?) "
                 "ON DUPLICATE KEY UPDATE "
                 "watermark = watermark + VALUES(watermark), "
-                "upscale = upscale + VALUES(upscale)",
+                "upscale = upscale + VALUES(upscale), "
+                "image_set = image_set + VALUES(image_set)",
                 values,
             )
         else:
             conn.execute(
-                "INSERT INTO `usage` (user_id, watermark, upscale) VALUES (?,?,?) "
+                "INSERT INTO `usage` (user_id, watermark, upscale, image_set) VALUES (?,?,?,?) "
                 "ON CONFLICT(user_id) DO UPDATE SET "
                 "watermark = `usage`.watermark + excluded.watermark, "
-                "upscale = `usage`.upscale + excluded.upscale",
+                "upscale = `usage`.upscale + excluded.upscale, "
+                "image_set = `usage`.image_set + excluded.image_set",
                 values,
             )
         conn.commit()
@@ -220,13 +237,14 @@ def get_usage(uid: int) -> Dict[str, int]:
     conn = _db()
     try:
         row = conn.execute(
-            "SELECT watermark, upscale FROM `usage` WHERE user_id=?", (uid,)
+            "SELECT watermark, upscale, image_set FROM `usage` WHERE user_id=?", (uid,)
         ).fetchone()
     finally:
         conn.close()
     return {
         "watermark": int(row[0]) if row else 0,
         "upscale": int(row[1]) if row else 0,
+        "image_set": int(row[2]) if row else 0,
     }
 
 
@@ -235,9 +253,10 @@ def list_usage() -> list[Dict[str, Any]]:
     try:
         rows = conn.execute(
             "SELECT u.email, u.api_key, "
-            "COALESCE(x.watermark, 0), COALESCE(x.upscale, 0) "
+            "COALESCE(x.watermark, 0), COALESCE(x.upscale, 0), COALESCE(x.image_set, 0) "
             "FROM users u LEFT JOIN `usage` x ON x.user_id = u.id "
-            "ORDER BY (COALESCE(x.watermark, 0) + COALESCE(x.upscale, 0)) DESC, u.email"
+            "ORDER BY (COALESCE(x.watermark, 0) + COALESCE(x.upscale, 0) "
+            "+ COALESCE(x.image_set, 0)) DESC, u.email"
         ).fetchall()
     finally:
         conn.close()
@@ -247,6 +266,7 @@ def list_usage() -> list[Dict[str, Any]]:
             "api_key": row[1],
             "watermark": int(row[2]),
             "upscale": int(row[3]),
+            "image_set": int(row[4]),
         }
         for row in rows
     ]

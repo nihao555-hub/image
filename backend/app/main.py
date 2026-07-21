@@ -568,6 +568,7 @@ async def generate(
         if isinstance(r, Exception):
             raise HTTPException(status_code=502, detail=f"Generation submit failed: {r}")
         tasks.append(r)
+    auth.record_usage(_uid, "image_set", len(tasks))
     return GenerateResponse(tasks=tasks)
 
 
@@ -840,7 +841,10 @@ async def upscale(
 @app.get("/api/usage")
 async def usage(_uid: int = Depends(auth.require_user)) -> Dict[str, int]:
     counts = auth.get_usage(_uid)
-    return {**counts, "total": counts["watermark"] + counts["upscale"]}
+    return {
+        **counts,
+        "total": counts["watermark"] + counts["upscale"] + counts["image_set"],
+    }
 
 
 @app.get("/api/admin/usage", response_class=HTMLResponse)
@@ -856,14 +860,16 @@ async def admin_usage(
     rows = auth.list_usage()
     total_watermark = sum(row["watermark"] for row in rows)
     total_upscale = sum(row["upscale"] for row in rows)
-    total = total_watermark + total_upscale
+    total_image_set = sum(row["image_set"] for row in rows)
+    total = total_watermark + total_upscale + total_image_set
     body_rows = "".join(
         "<tr>"
         f"<td>{escape(row['email'])}</td>"
         f"<td>******{escape(row['api_key'][-6:])}</td>"
         f"<td>{row['watermark']}</td>"
         f"<td>{row['upscale']}</td>"
-        f"<td>{row['watermark'] + row['upscale']}</td>"
+        f"<td>{row['image_set']}</td>"
+        f"<td>{row['watermark'] + row['upscale'] + row['image_set']}</td>"
         "</tr>"
         for row in rows
     )
@@ -872,13 +878,14 @@ async def admin_usage(
 <head><meta charset="utf-8"><title>使用统计</title></head>
 <body style="font-family:system-ui,-apple-system,sans-serif;margin:32px;color:#202124">
 <h1 style="margin:0 0 8px">使用统计</h1>
-<p style="color:#5f6368">用户 {len(rows)} · 去水印 {total_watermark} 次 · 超清 {total_upscale} 次 · 合计 {total} 次</p>
+<p style="color:#5f6368">用户 {len(rows)} · 去水印 {total_watermark} 次 · 超清 {total_upscale} 次 · 套图生成 {total_image_set} 张 · 合计 {total} 次</p>
 <table style="border-collapse:collapse;min-width:720px">
 <thead><tr style="text-align:left;background:#f3f4f6">
 <th style="padding:10px;border:1px solid #ddd">邮箱</th>
 <th style="padding:10px;border:1px solid #ddd">API Key</th>
 <th style="padding:10px;border:1px solid #ddd">去水印</th>
 <th style="padding:10px;border:1px solid #ddd">超清</th>
+<th style="padding:10px;border:1px solid #ddd">套图生成</th>
 <th style="padding:10px;border:1px solid #ddd">合计</th>
 </tr></thead>
 <tbody>{body_rows}</tbody>

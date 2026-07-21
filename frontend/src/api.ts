@@ -82,6 +82,7 @@ export interface AuthUser {
 export interface Usage {
   watermark: number
   upscale: number
+  image_set: number
   total: number
 }
 

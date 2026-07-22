@@ -4,12 +4,13 @@ import io
 import json
 import os
 import re
+import time
 from html import escape
 from math import gcd
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from PIL import Image
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -25,7 +26,10 @@ from .platforms import (
     resolve_aspect,
 )
 
-app = FastAPI(title="AI E-commerce Image Set Generator")
+app = FastAPI(
+    title="AI E-commerce Image Set Generator",
+    root_path=config.ROOT_PATH,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,6 +38,47 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --------------------------------------------------------------------------- #
+# Server-side auto-retry for transient generation failures
+# --------------------------------------------------------------------------- #
+# The public task id returned to the client stays stable; when polling detects a
+# failed/errored task and retries remain, the original job is resubmitted and the
+# new upstream id is tracked behind the same public id. Callers just keep polling.
+MAX_GENERATION_ATTEMPTS = 5
+_RETRY_TTL_SECONDS = 1800
+_RETRY_MAX_ENTRIES = 2000
+
+
+class _RetryEntry:
+    def __init__(self, current_id: str, resubmit: Callable[[], Awaitable[str]]):
+        self.current_id = current_id
+        self.attempts = 1
+        self.resubmit = resubmit
+        self.created = time.monotonic()
+
+
+_retry_registry: Dict[str, _RetryEntry] = {}
+
+
+def _evict_retries() -> None:
+    now = time.monotonic()
+    for key in [
+        k for k, v in _retry_registry.items() if now - v.created > _RETRY_TTL_SECONDS
+    ]:
+        _retry_registry.pop(key, None)
+    overflow = len(_retry_registry) - _RETRY_MAX_ENTRIES
+    if overflow > 0:
+        for key in sorted(
+            _retry_registry, key=lambda k: _retry_registry[k].created
+        )[:overflow]:
+            _retry_registry.pop(key, None)
+
+
+def _register_retry(public_id: str, resubmit: Callable[[], Awaitable[str]]) -> None:
+    _evict_retries()
+    _retry_registry[public_id] = _RetryEntry(public_id, resubmit)
 
 
 # --------------------------------------------------------------------------- #
@@ -66,6 +111,7 @@ class GeneratePromptsRequest(BaseModel):
     platform: str = ""
     language: str = ""
     density: str = ""
+    aspect_ratio: str = ""
     # Optional reference product image (data URL or http URL). When provided the
     # LLM is asked to visually inspect it before writing the prompts.
     image_base64: Optional[str] = None
@@ -97,6 +143,12 @@ class TaskInfo(BaseModel):
 
 class GenerateResponse(BaseModel):
     tasks: List[TaskInfo]
+
+
+class GenerateImageSetResponse(BaseModel):
+    tasks: List[TaskInfo]
+    prompts: Dict[str, str]
+    template_ids: List[str]
 
 
 class ResultRequest(BaseModel):
@@ -202,6 +254,88 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _parse_template_ids(value: str) -> List[str]:
+    if not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        parsed = [item.strip() for item in value.split(",")]
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise HTTPException(
+            status_code=422,
+            detail="template_ids must be a JSON string array or comma-separated string",
+        )
+    template_ids = list(dict.fromkeys(item.strip() for item in parsed if item.strip()))
+    invalid = [template_id for template_id in template_ids if template_id not in TEMPLATE_BY_ID]
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown template_ids: {', '.join(invalid)}",
+        )
+    return template_ids
+
+
+async def _image_data_url(image: Optional[UploadFile]) -> Optional[str]:
+    if image is None:
+        return None
+    try:
+        data = await image.read(config.MAX_UPLOAD_BYTES + 1)
+    finally:
+        await image.close()
+    if not data:
+        raise HTTPException(status_code=422, detail="Uploaded image is empty")
+    if len(data) > config.MAX_UPLOAD_BYTES:
+        max_mb = config.MAX_UPLOAD_BYTES / 1024 / 1024
+        raise HTTPException(
+            status_code=413,
+            detail=f"Uploaded image exceeds the {max_mb:g} MB limit",
+        )
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            image_format = source.format
+            source.verify()
+    except Exception as exc:
+        raise HTTPException(status_code=415, detail="Uploaded file is not a valid image") from exc
+    media_types = {
+        "JPEG": "image/jpeg",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+    }
+    media_type = media_types.get(image_format or "")
+    if media_type is None:
+        raise HTTPException(
+            status_code=415,
+            detail="Only JPEG, PNG, and WebP reference images are supported",
+        )
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{media_type};base64,{encoded}"
+
+
+def _direct_set_prompt(
+    prompt: str,
+    template_id: str,
+    language: str,
+    density: str,
+) -> str:
+    template = TEMPLATE_BY_ID[template_id]
+    text_level = template.get("textLevel", "none")
+    if text_level == "none":
+        text_rule = " Keep the image completely free of text and logos."
+    else:
+        amount = _text_amount(text_level, density)
+        language_name = LANGUAGE_NAMES.get(language, "English")
+        text_rule = (
+            f" Render {amount} well-composed marketing labels on the image in "
+            f"{language_name}."
+        )
+    return (
+        f"{prompt.strip()}\n\n"
+        f"Image type: {template['name']} ({template['en']}). "
+        f"{template['guidance']}{text_rule}"
+    )
+
+
 def _aspect_orientation(aspect: str) -> str:
     m = re.match(r"^\s*(\d+)\s*[x×]\s*(\d+)\s*$", aspect or "")
     if not m:
@@ -291,8 +425,8 @@ async def generate_prompts(
         else ""
     )
     platform_aspect_note = ""
-    if platform:
-        aspect = str(platform.get("aspect") or "").strip()
+    if platform or req.aspect_ratio:
+        aspect = req.aspect_ratio or str(platform.get("aspect") or "").strip()
         orientation = _aspect_orientation(aspect)
         ratio = _aspect_ratio_label(aspect)
         if orientation == "portrait":
@@ -395,27 +529,35 @@ async def generate(
     if not req.jobs:
         raise HTTPException(status_code=400, detail="No jobs provided")
 
-    async def _submit(job: GenerateJob) -> TaskInfo:
+    def _make_submitter(job: GenerateJob) -> Callable[[], Awaitable[str]]:
         urls = [job.image_base64] if job.image_base64 else None
         aspect_ratio = resolve_aspect(job.platform, job.aspectRatio)
-        # Retry the submission a few times to ride out transient upstream errors.
-        last_exc: Optional[Exception] = None
-        for attempt in range(3):
-            try:
-                task_id = await grsai.submit_draw(
-                    prompt=job.prompt,
-                    aspect_ratio=aspect_ratio,
-                    quality=job.quality,
-                    urls=urls,
-                )
-                return TaskInfo(
-                    task_id=task_id, template_id=job.template_id, label=job.label
-                )
-            except Exception as exc:  # noqa: BLE001 - retry any submit failure
-                last_exc = exc
-                if attempt < 2:
-                    await asyncio.sleep(1.5 * (attempt + 1))
-        raise last_exc if last_exc else grsai.GrsaiError("submit failed")
+
+        async def _do() -> str:
+            # Retry the submission a few times to ride out transient upstream errors.
+            last_exc: Optional[Exception] = None
+            for attempt in range(3):
+                try:
+                    return await grsai.submit_draw(
+                        prompt=job.prompt,
+                        aspect_ratio=aspect_ratio,
+                        quality=job.quality,
+                        urls=urls,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retry any submit failure
+                    last_exc = exc
+                    if attempt < 2:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+            raise last_exc if last_exc else grsai.GrsaiError("submit failed")
+
+        return _do
+
+    async def _submit(job: GenerateJob) -> TaskInfo:
+        do_submit = _make_submitter(job)
+        task_id = await do_submit()
+        # Register the job so a failed generation is auto-retried during polling.
+        _register_retry(task_id, do_submit)
+        return TaskInfo(task_id=task_id, template_id=job.template_id, label=job.label)
 
     # Submit all jobs concurrently so the batch is generated in parallel.
     results = await asyncio.gather(
@@ -426,7 +568,100 @@ async def generate(
         if isinstance(r, Exception):
             raise HTTPException(status_code=502, detail=f"Generation submit failed: {r}")
         tasks.append(r)
+    auth.record_usage(_uid, "image_set", len(tasks))
     return GenerateResponse(tasks=tasks)
+
+
+@app.post("/api/image-sets/generate", response_model=GenerateImageSetResponse)
+async def generate_image_set(
+    prompt: str = Form(..., min_length=1, max_length=12000),
+    image: Optional[UploadFile] = File(default=None),
+    template_ids: str = Form(default=""),
+    platform: str = Form(default="custom"),
+    language: str = Form(default=""),
+    density: str = Form(default=""),
+    quality: str = Form(default="high"),
+    aspect_ratio: str = Form(default=""),
+    auto_prompts: bool = Form(default=True),
+    label: str = Form(default="API 套图"),
+    _uid: int = Depends(auth.require_user),
+) -> GenerateImageSetResponse:
+    prompt = prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=422, detail="prompt cannot be blank")
+
+    platform_config = PLATFORM_BY_ID.get(platform)
+    if platform_config is None:
+        raise HTTPException(status_code=422, detail=f"Unknown platform: {platform}")
+
+    selected_ids = _parse_template_ids(template_ids)
+    if not selected_ids:
+        selected_ids = list(platform_config["templates"])
+
+    resolved_language = language or platform_config["language"]
+    if resolved_language not in LANGUAGE_NAMES:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported language: {resolved_language}"
+        )
+    resolved_density = density or platform_config["textDensity"]
+    if resolved_density not in DENSITY_INSTRUCTIONS:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported density: {resolved_density}"
+        )
+    if quality not in {"auto", "low", "medium", "high"}:
+        raise HTTPException(status_code=422, detail=f"Unsupported quality: {quality}")
+    if aspect_ratio and aspect_ratio not in {
+        "1024x1024",
+        "1024x1536",
+        "1536x1024",
+    }:
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported aspect_ratio: {aspect_ratio}"
+        )
+
+    image_base64 = await _image_data_url(image)
+    product = ProductInfo(extra=prompt)
+    if auto_prompts:
+        prompt_response = await generate_prompts(
+            GeneratePromptsRequest(
+                product=product,
+                template_ids=selected_ids,
+                has_image=image_base64 is not None,
+                platform=platform,
+                language=resolved_language,
+                density=resolved_density,
+                aspect_ratio=aspect_ratio,
+                image_base64=image_base64,
+            ),
+            _uid,
+        )
+        prompts = prompt_response.prompts
+    else:
+        prompts = {
+            template_id: _direct_set_prompt(
+                prompt, template_id, resolved_language, resolved_density
+            )
+            for template_id in selected_ids
+        }
+
+    jobs = [
+        GenerateJob(
+            template_id=template_id,
+            prompt=prompts[template_id],
+            aspectRatio=aspect_ratio or TEMPLATE_BY_ID[template_id]["aspectRatio"],
+            platform="" if aspect_ratio else platform,
+            quality=quality,
+            image_base64=image_base64,
+            label=f"{label.strip() or 'API 套图'} · {TEMPLATE_BY_ID[template_id]['name']}",
+        )
+        for template_id in selected_ids
+    ]
+    generation = await generate(GenerateRequest(jobs=jobs), _uid)
+    return GenerateImageSetResponse(
+        tasks=generation.tasks,
+        prompts=prompts,
+        template_ids=selected_ids,
+    )
 
 
 class WatermarkRequest(BaseModel):
@@ -560,15 +795,19 @@ async def watermark(
     """Submit a single watermark-removal task; the client polls /api/result."""
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
-    try:
-        task_id = await _submit_restore(
+    async def _do() -> str:
+        return await _submit_restore(
             WATERMARK_PROMPT,
             req.image_base64,
             req.mode,
             aspect_ratio=req.aspectRatio,
         )
+
+    try:
+        task_id = await _do()
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Watermark submit failed: {exc}")
+    _register_retry(task_id, _do)
     auth.record_usage(_uid, "watermark")
     return {"task_id": task_id}
 
@@ -580,17 +819,21 @@ async def upscale(
     """Submit a single HD-enhancement task; the client polls /api/result."""
     if not req.image_base64:
         raise HTTPException(status_code=400, detail="image_base64 is required")
-    try:
+    async def _do() -> str:
         # Upscale always targets the maximum allowed pixel area (~4K).
-        task_id = await _submit_restore(
+        return await _submit_restore(
             UPSCALE_PROMPT,
             req.image_base64,
             req.mode,
             area=8_294_400,
             aspect_ratio=req.aspectRatio,
         )
+
+    try:
+        task_id = await _do()
     except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
         raise HTTPException(status_code=502, detail=f"Upscale submit failed: {exc}")
+    _register_retry(task_id, _do)
     auth.record_usage(_uid, "upscale")
     return {"task_id": task_id}
 
@@ -598,7 +841,10 @@ async def upscale(
 @app.get("/api/usage")
 async def usage(_uid: int = Depends(auth.require_user)) -> Dict[str, int]:
     counts = auth.get_usage(_uid)
-    return {**counts, "total": counts["watermark"] + counts["upscale"]}
+    return {
+        **counts,
+        "total": counts["watermark"] + counts["upscale"] + counts["image_set"],
+    }
 
 
 @app.get("/api/admin/usage", response_class=HTMLResponse)
@@ -614,14 +860,16 @@ async def admin_usage(
     rows = auth.list_usage()
     total_watermark = sum(row["watermark"] for row in rows)
     total_upscale = sum(row["upscale"] for row in rows)
-    total = total_watermark + total_upscale
+    total_image_set = sum(row["image_set"] for row in rows)
+    total = total_watermark + total_upscale + total_image_set
     body_rows = "".join(
         "<tr>"
         f"<td>{escape(row['email'])}</td>"
         f"<td>******{escape(row['api_key'][-6:])}</td>"
         f"<td>{row['watermark']}</td>"
         f"<td>{row['upscale']}</td>"
-        f"<td>{row['watermark'] + row['upscale']}</td>"
+        f"<td>{row['image_set']}</td>"
+        f"<td>{row['watermark'] + row['upscale'] + row['image_set']}</td>"
         "</tr>"
         for row in rows
     )
@@ -630,13 +878,14 @@ async def admin_usage(
 <head><meta charset="utf-8"><title>使用统计</title></head>
 <body style="font-family:system-ui,-apple-system,sans-serif;margin:32px;color:#202124">
 <h1 style="margin:0 0 8px">使用统计</h1>
-<p style="color:#5f6368">用户 {len(rows)} · 去水印 {total_watermark} 次 · 超清 {total_upscale} 次 · 合计 {total} 次</p>
+<p style="color:#5f6368">用户 {len(rows)} · 去水印 {total_watermark} 次 · 超清 {total_upscale} 次 · 套图生成 {total_image_set} 张 · 合计 {total} 次</p>
 <table style="border-collapse:collapse;min-width:720px">
 <thead><tr style="text-align:left;background:#f3f4f6">
 <th style="padding:10px;border:1px solid #ddd">邮箱</th>
 <th style="padding:10px;border:1px solid #ddd">API Key</th>
 <th style="padding:10px;border:1px solid #ddd">去水印</th>
 <th style="padding:10px;border:1px solid #ddd">超清</th>
+<th style="padding:10px;border:1px solid #ddd">套图生成</th>
 <th style="padding:10px;border:1px solid #ddd">合计</th>
 </tr></thead>
 <tbody>{body_rows}</tbody>
@@ -646,26 +895,54 @@ async def admin_usage(
 
 
 @app.post("/api/result")
+@app.post("/api/image-sets/result")
 async def result(
     req: ResultRequest, _uid: int = Depends(auth.require_user)
 ) -> Dict[str, Any]:
-    async def _one(task_id: str) -> tuple[str, Dict[str, Any]]:
+    async def _fetch(poll_id: str) -> Dict[str, Any]:
         try:
-            if task_id.startswith("gk:"):
-                return task_id, await geekai.get_result(task_id[3:])
-            data = await grsai.get_result(task_id)
+            if poll_id.startswith("gk:"):
+                return await geekai.get_result(poll_id[3:])
+            data = await grsai.get_result(poll_id)
             d = data.get("data", {})
-            return task_id, {
+            return {
                 "status": d.get("status", "unknown"),
                 "progress": d.get("progress", 0),
                 "results": d.get("results") or [],
                 "failure_reason": d.get("failure_reason", ""),
                 "error": d.get("error", ""),
             }
-        except Exception as exc:
-            return task_id, {"status": "error", "error": str(exc), "results": []}
+        except Exception as exc:  # noqa: BLE001 - surface upstream failure to client
+            return {"status": "error", "error": str(exc), "results": []}
 
-    pairs = await asyncio.gather(*(_one(tid) for tid in req.ids))
+    async def _one(public_id: str) -> tuple[str, Dict[str, Any]]:
+        entry = _retry_registry.get(public_id)
+        res = await _fetch(entry.current_id if entry else public_id)
+        if entry is None:
+            return public_id, res
+        status = res.get("status")
+        if status in ("failed", "error") and entry.attempts < MAX_GENERATION_ATTEMPTS:
+            entry.attempts += 1
+            try:
+                entry.current_id = await entry.resubmit()
+            except Exception:  # noqa: BLE001 - resubmit itself failed; retry next poll
+                if entry.attempts >= MAX_GENERATION_ATTEMPTS:
+                    _retry_registry.pop(public_id, None)
+                    return public_id, res
+            return public_id, {
+                "status": "retrying",
+                "progress": 0,
+                "results": [],
+                "failure_reason": res.get("failure_reason", ""),
+                "error": res.get("error", ""),
+                "attempt": entry.attempts,
+            }
+        if status == "succeeded" or status in ("failed", "error"):
+            _retry_registry.pop(public_id, None)
+        return public_id, res
+
+    ids = list(dict.fromkeys(req.ids))
+    pairs = await asyncio.gather(*(_one(tid) for tid in ids))
     return {"results": dict(pairs)}
 
 

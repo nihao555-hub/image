@@ -82,10 +82,16 @@ export interface AuthUser {
 export interface Usage {
   watermark: number
   upscale: number
+  image_set: number
   total: number
 }
 
 const AUTH_KEY = 'tj-auth'
+
+// Prefix API paths with the app's deployment base so the SPA works both at
+// the site root and under a reverse-proxy sub-path (e.g. /ecom-image-api/).
+const apiUrl = (path: string): string =>
+  `${import.meta.env.BASE_URL.replace(/\/$/, '')}${path}`
 
 export function getAuth(): AuthUser | null {
   try {
@@ -126,7 +132,7 @@ export async function authRequest(
   email: string,
   password: string,
 ): Promise<AuthUser> {
-  const resp = await fetch(`/api/auth/${kind}`, {
+  const resp = await fetch(apiUrl(`/api/auth/${kind}`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -141,13 +147,13 @@ export async function authRequest(
 }
 
 export async function fetchTemplates(): Promise<{ templates: Template[]; categories: Category[] }> {
-  const resp = await fetch('/api/templates')
+  const resp = await fetch(apiUrl('/api/templates'))
   if (!resp.ok) throw new Error('Failed to load templates')
   return resp.json()
 }
 
 export async function fetchPlatforms(): Promise<Platform[]> {
-  const resp = await fetch('/api/platforms')
+  const resp = await fetch(apiUrl('/api/platforms'))
   if (!resp.ok) throw new Error('Failed to load platforms')
   const data = await resp.json()
   return data.platforms as Platform[]
@@ -162,7 +168,7 @@ export async function generatePrompts(
   density: string,
   imageBase64?: string | null,
 ): Promise<Record<string, string>> {
-  const data = await post<{ prompts: Record<string, string> }>('/api/generate-prompts', {
+  const data = await post<{ prompts: Record<string, string> }>(apiUrl('/api/generate-prompts'), {
     product,
     template_ids: templateIds,
     has_image: hasImage,
@@ -175,7 +181,7 @@ export async function generatePrompts(
 }
 
 export async function generateImages(jobs: GenerateJob[]): Promise<TaskInfo[]> {
-  const data = await post<{ tasks: TaskInfo[] }>('/api/generate', { jobs })
+  const data = await post<{ tasks: TaskInfo[] }>(apiUrl('/api/generate'), { jobs })
   return data.tasks
 }
 
@@ -187,7 +193,7 @@ export async function submitRestore(
   mode: RestoreMode,
   aspect = '',
 ): Promise<string> {
-  const data = await post<{ task_id: string }>(`/api/${feature}`, {
+  const data = await post<{ task_id: string }>(apiUrl(`/api/${feature}`), {
     image_base64: imageBase64,
     mode,
     aspectRatio: aspect,
@@ -196,7 +202,7 @@ export async function submitRestore(
 }
 
 export async function fetchResults(ids: string[]): Promise<Record<string, TaskResult>> {
-  const data = await post<{ results: Record<string, TaskResult> }>('/api/result', { ids })
+  const data = await post<{ results: Record<string, TaskResult> }>(apiUrl('/api/result'), { ids })
   return data.results
 }
 
@@ -204,7 +210,7 @@ export async function fetchUsage(): Promise<Usage> {
   const user = getAuth()
   const headers: Record<string, string> = {}
   if (user) headers.Authorization = `Bearer ${user.token}`
-  const resp = await fetch('/api/usage', { headers })
+  const resp = await fetch(apiUrl('/api/usage'), { headers })
   if (!resp.ok) {
     if (resp.status === 401 && user) {
       setAuth(null)

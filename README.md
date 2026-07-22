@@ -62,3 +62,47 @@ npm run dev        # http://localhost:5173  (已配置 /api 代理到 :8000)
 | POST | `/api/generate-prompts` | LLM 为选中套图类型生成提示词 |
 | POST | `/api/generate` | 提交生成任务，返回 task id 列表 |
 | POST | `/api/result` | 轮询任务结果 |
+| POST | `/api/image-sets/generate` | 上传提示词、参考图及选项，一次提交整套图片任务 |
+| POST | `/api/image-sets/result` | 轮询整套图片任务结果 |
+
+### 公网套图生成 API
+
+`POST /api/image-sets/generate` 使用 `multipart/form-data`。除健康检查、注册和登录外，API 请求均需使用登录返回的会话令牌或永久 API Key：
+
+```http
+Authorization: Bearer sk-tj-...
+```
+
+| 字段 | 必填 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `prompt` | 是 | — | 商品描述、卖点及整体生成要求 |
+| `image` | 否 | — | JPEG、PNG 或 WebP 商品参考图，默认最大 10 MB |
+| `template_ids` | 否 | 平台推荐套图 | JSON 字符串数组或逗号分隔的模板 ID |
+| `platform` | 否 | `custom` | 平台 ID；可通过 `GET /api/platforms` 查询 |
+| `language` | 否 | 平台默认值 | 图片中文字语言 |
+| `density` | 否 | 平台默认值 | `clean`、`balanced` 或 `rich` |
+| `quality` | 否 | `high` | `auto`、`low`、`medium` 或 `high` |
+| `aspect_ratio` | 否 | 平台及模板默认值 | `1024x1024`、`1024x1536` 或 `1536x1024` |
+| `auto_prompts` | 否 | `true` | 是否让 LLM 为每种套图扩写独立提示词 |
+| `label` | 否 | `API 套图` | 返回任务的商品标签 |
+
+```bash
+curl -X POST https://shuoma.site/ecom-image-api/api/image-sets/generate \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -F 'prompt=一款轻量防水通勤双肩包，突出大容量和电脑保护层' \
+  -F 'image=@./product.png' \
+  -F 'platform=amazon' \
+  -F 'template_ids=["white_background","feature_infographic","lifestyle_scene"]' \
+  -F 'language=en' \
+  -F 'density=clean' \
+  -F 'quality=high'
+```
+
+响应会返回每张图的 `task_id`、最终使用的提示词和套图类型。使用任务 ID 轮询：
+
+```bash
+curl -X POST https://shuoma.site/ecom-image-api/api/image-sets/result \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -H 'Content-Type: application/json' \
+  -d '{"ids":["task-id-1","task-id-2"]}'
+```
